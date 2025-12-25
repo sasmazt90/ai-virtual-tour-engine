@@ -1,91 +1,131 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from typing import List, Optional
+from typing import List
 import os
 import uuid
-from services.grouping import group_images_by_room
-from services.stitching import stitch_images_to_panorama
-from services.inpaint import fill_black_with_openai_inpaint, make_mask_from_black_pixels
+import cv2
+import numpy as np
 
-app = FastAPI(title="AI Virtual Tour Engine")
+from services.grouping import group_images_into_rooms
+from services.panorama import build_panorama_360
+from services.storage import save_image, OUTPUT_DIR
 
-UPLOAD_DIR = "uploads"
-OUT_DIR = "outputs"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(OUT_DIR, exist_ok=True)
 
+app = FastAPI(
+    title="AI Virtual Tour Engine",
+    version="0.1.0"
+)
+
+# -------------------------------------------------
+# Static files (viewer)
+# -------------------------------------------------
 app.mount("/static", StaticFiles(directory="static"), name="static")
-app.mount("/outputs", StaticFiles(directory=OUT_DIR), name="outputs")
 
+
+# -------------------------------------------------
+# Root
+# -------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def root():
     return """
-    <h2>AI Virtual Tour Engine</h2>
+    <h1>AI Virtual Tour Engine</h1>
     <ul>
-      <li>POST /group (files[]) -> rooms</li>
-      <li>POST /panorama (files[]) -> stitched pano + inpainted pano</li>
-      <li>GET  /viewer?img=/outputs/xxx.jpg</li>
+        <li>POST /group (files[]) -> rooms</li>
+        <li>POST /panorama (files[]) -> stitched + inpainted panorama</li>
+        <li>GET /viewer?img=/outputs/xxx.jpg</li>
     </ul>
     """
 
+
+# -------------------------------------------------
+# GROUP ENDPOINT (ÖNCELİK 1)
+# -------------------------------------------------
 @app.post("/group")
 async def group_endpoint(files: List[UploadFile] = File(...)):
-    # save files
-    paths = []
+    images = []
+
     for f in files:
-        ext = os.path.splitext(f.filename)[1].lower() or ".jpg"
-        name = f"{uuid.uuid4().hex}{ext}"
-        p = os.path.join(UPLOAD_DIR, name)
-        with open(p, "wb") as out:
-            out.write(await f.read())
-        paths.append(p)
+        data = await f.read()
+        np_img = np.frombuffer(data, np.uint8)
+        img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
 
-    groups = group_images_by_room(paths)
-    return JSONResponse(groups)
+        if img is None:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"Invalid image: {f.filename}"}
+            )
 
-@app.post("/panorama")
-async def panorama_endpoint(
-    files: List[UploadFile] = File(...),
-    do_inpaint: bool = Form(True),
-):
-    # 1) save
-    paths = []
-    for f in files:
-        ext = os.path.splitext(f.filename)[1].lower() or ".jpg"
-        name = f"{uuid.uuid4().hex}{ext}"
-        p = os.path.join(UPLOAD_DIR, name)
-        with open(p, "wb") as out:
-            out.write(await f.read())
-        paths.append(p)
+        images.append(img)
 
-    # 2) stitch
-    pano_path = os.path.join(OUT_DIR, f"pano_{uuid.uuid4().hex}.jpg")
-    stitch_images_to_panorama(paths, pano_path)
+    rooms = group_images_into_rooms(images)
 
-    result = {
-        "stitched": f"/outputs/{os.path.basename(pano_path)}"
+    return {
+        "room_count": len(rooms),
+        "rooms": [
+            {
+                "room_id": i,
+                "image_count": len(room)
+            }
+            for i, room in enumerate(rooms)
+        ]
     }
 
-    # 3) inpaint black regions (optional)
-    if do_inpaint:
-        mask_path = os.path.join(OUT_DIR, f"mask_{uuid.uuid4().hex}.png")
-        make_mask_from_black_pixels(pano_path, mask_path)
 
-        filled_path = os.path.join(OUT_DIR, f"pano_filled_{uuid.uuid4().hex}.jpg")
-        fill_black_with_openai_inpaint(
-            image_path=pano_path,
-            mask_path=mask_path,
-            out_path=filled_path
+# -------------------------------------------------
+# PANORAMA ENDPOINT (ÖNCELİK 2)
+# -------------------------------------------------
+@app.post("/panorama")
+async def panorama_endpoint(files: List[UploadFile] = File(...)):
+    images = []
+
+    for f in files:
+        data = await f.read()
+        np_img = np.frombuffer(data, np.uint8)
+        img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+
+        if img is None:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"Invalid image: {f.filename}"}
+            )
+
+        images.append(img)
+
+    try:
+        pano = build_panorama_360(images)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
         )
-        result["mask"] = f"/outputs/{os.path.basename(mask_path)}"
-        result["filled"] = f"/outputs/{os.path.basename(filled_path)}"
-        result["viewer"] = f"/viewer?img={result['filled']}"
 
-    return JSONResponse(result)
+    filename = f"{uuid.uuid4().hex}.jpg"
+    output_path = save_image(pano, filename)
 
+    return {
+        "panorama_path": f"/outputs/{filename}",
+        "viewer_url": f"/viewer?img=/outputs/{filename}"
+    }
+
+
+# -------------------------------------------------
+# VIEWER (360 HTML)
+# -------------------------------------------------
 @app.get("/viewer", response_class=HTMLResponse)
 def viewer(img: str):
-    # img should be like /outputs/xxx.jpg
-    html = open("static/viewer.html", "r", encoding="utf-8").read()
-    return html.replace("{{IMG_URL}}", img)
+    viewer_path = os.path.join("static", "viewer.html")
+
+    if not os.path.exists(viewer_path):
+        return HTMLResponse("<h2>viewer.html not found</h2>", status_code=500)
+
+    with open(viewer_path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    return html.replace("{{IMAGE_URL}}", img)
+
+
+# -------------------------------------------------
+# Ensure output dir exists
+# -------------------------------------------------
+os.makedirs(OUTPUT_DIR, exist_ok=True)
