@@ -1,270 +1,301 @@
-from _future_ import annotations
+from __future__ import annotations
 
-import math
-from typing import List, Tuple, Optional, Dict, Any
+import os
+import io
+import base64
+from dataclasses import dataclass
+from typing import List, Optional, Tuple, Dict, Any
 
-import cv2
 import numpy as np
+import cv2
+from PIL import Image
+
+import requests
 
 
 # =========================================================
-# Core panorama builder
+# Config
 # =========================================================
 
-def build_panorama(
+@dataclass
+class PanoramaConfig:
+    # OpenCV stitcher mode
+    stitcher_mode: int = cv2.Stitcher_PANORAMA
+
+    # Resize for stitching speed/robustness (max side)
+    stitch_max_side: int = 1400
+
+    # After stitch, final output max width (keeps detail but avoids huge files)
+    output_max_width: int = 4096
+
+    # Mask threshold: what counts as "black hole" area to inpaint
+    black_thresh: int = 10
+
+    # Expand mask a bit to avoid seams at mask edges
+    mask_dilate_px: int = 12
+
+    # If too much of the pano is black, stitching probably failed
+    max_black_ratio: float = 0.45
+
+    # 360 seam blending band (pixels)
+    seam_blend_band: int = 96
+
+    # Inpaint with OpenAI?
+    use_ai_inpaint: bool = True
+
+    # Inpaint prompt: keep room consistent, no new objects
+    inpaint_prompt: str = (
+        "Fill missing areas realistically using the same room context, lighting, materials, and perspective. "
+        "Do NOT add new objects or furniture. Keep architecture consistent. Photorealistic."
+    )
+
+
+# =========================================================
+# Public API
+# =========================================================
+
+def build_panorama_360(
     images_bgr: List[np.ndarray],
     *,
-    try_scans_fallback: bool = True,
-    inpaint_black: bool = True,
-    enforce_360_seam: bool = True,
+    config: Optional[PanoramaConfig] = None
 ) -> np.ndarray:
     """
-    Build panorama from a list of BGR images.
-
-    Pipeline:
-      1) Stitch (OpenCV Stitcher)
-      2) Crop black borders
-      3) Fill black holes (inpaint)
-      4) 360 seam enforcement (wrap-aware seam selection + edge blending)
-
-    Returns: panorama BGR image
+    Main function:
+      - stitch panorama
+      - detect black gaps
+      - AI inpaint gaps
+      - make 360 wrap seam smoother (left-right continuity)
+    Returns:
+      final panorama BGR uint8
     """
-    if not images_bgr or len(images_bgr) < 2:
-        raise ValueError("build_panorama requires at least 2 images")
+    if config is None:
+        config = PanoramaConfig()
 
-    imgs = [_ensure_bgr_uint8(i) for i in images_bgr]
-    pano = _stitch_opencv(imgs, try_scans_fallback=try_scans_fallback)
+    if len(images_bgr) < 2:
+        raise ValueError("Need at least 2 images for panorama stitching")
 
-    pano = _crop_black_borders(pano)
+    pano = stitch_panorama(images_bgr, config=config)
+    pano = _cap_width(pano, config.output_max_width)
 
-    if inpaint_black:
-        pano = _inpaint_black_regions(pano)
+    # Mask black holes
+    mask = compute_black_gap_mask(pano, thresh=config.black_thresh, dilate_px=config.mask_dilate_px)
 
-    pano = _crop_black_borders(pano)
+    black_ratio = float(np.mean(mask > 0))
+    if black_ratio > config.max_black_ratio:
+        # too much missing => stitching unusable
+        raise RuntimeError(f"Panorama has too many missing pixels (black_ratio={black_ratio:.2f}).")
 
-    if enforce_360_seam:
-        pano = _make_360_seamless(pano)
+    # AI inpaint missing zones if enabled & there is missing area
+    if config.use_ai_inpaint and black_ratio > 0.002:
+        pano = ai_inpaint_panorama(pano, mask, prompt=config.inpaint_prompt)
+
+    # 360 wrap seam blending
+    pano = wrap_seam_blend(pano, band=config.seam_blend_band)
 
     return pano
 
 
-# =========================================================
-# Stitching
-# =========================================================
-
-def _stitch_opencv(images_bgr: List[np.ndarray], *, try_scans_fallback: bool) -> np.ndarray:
+def stitch_panorama(images_bgr: List[np.ndarray], *, config: PanoramaConfig) -> np.ndarray:
     """
-    Uses OpenCV Stitcher in PANORAMA mode; optionally retries SCANS.
+    OpenCV stitcher.
     """
-    stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
-    status, pano = stitcher.stitch(images_bgr)
+    imgs = [_prep_for_stitch(img, max_side=config.stitch_max_side) for img in images_bgr]
 
-    if status == cv2.Stitcher_OK and pano is not None:
-        return pano
+    stitcher = cv2.Stitcher_create(config.stitcher_mode)
+    status, pano = stitcher.stitch(imgs)
 
-    if try_scans_fallback:
-        stitcher2 = cv2.Stitcher_create(cv2.Stitcher_SCANS)
-        status2, pano2 = stitcher2.stitch(images_bgr)
-        if status2 == cv2.Stitcher_OK and pano2 is not None:
-            return pano2
+    if status != cv2.Stitcher_OK or pano is None:
+        raise RuntimeError(f"OpenCV stitching failed (status={status}).")
 
-    raise RuntimeError(f"OpenCV stitching failed (status={status}).")
+    pano = _ensure_bgr_uint8(pano)
+    return pano
 
 
-# =========================================================
-# Black border cropping
-# =========================================================
-
-def _crop_black_borders(img_bgr: np.ndarray, *, threshold: int = 8) -> np.ndarray:
+def compute_black_gap_mask(pano_bgr: np.ndarray, *, thresh: int, dilate_px: int) -> np.ndarray:
     """
-    Crops outer black borders by finding bounding box of non-black pixels.
+    Returns a single-channel uint8 mask where 255 indicates areas to inpaint.
     """
-    if img_bgr is None:
-        raise ValueError("img is None")
+    pano = _ensure_bgr_uint8(pano_bgr)
+    gray = cv2.cvtColor(pano, cv2.COLOR_BGR2GRAY)
 
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    _, mask = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+    # black/near-black
+    mask = (gray <= thresh).astype(np.uint8) * 255
 
-    # Morph close to remove tiny holes
-    kernel = np.ones((7, 7), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    # also include transparent-like / undefined borders by catching very low saturation
+    hsv = cv2.cvtColor(pano, cv2.COLOR_BGR2HSV)
+    sat = hsv[:, :, 1]
+    val = hsv[:, :, 2]
+    mask2 = ((val <= thresh + 10) & (sat <= 20)).astype(np.uint8) * 255
 
-    coords = cv2.findNonZero(mask)
-    if coords is None:
-        return img_bgr  # nothing to crop
+    mask = cv2.bitwise_or(mask, mask2)
 
-    x, y, w, h = cv2.boundingRect(coords)
-    # safety
-    x2 = min(x + w, img_bgr.shape[1])
-    y2 = min(y + h, img_bgr.shape[0])
-    cropped = img_bgr[y:y2, x:x2].copy()
+    # Clean + dilate
+    mask = _morph_close(mask, k=7)
+    if dilate_px > 0:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_px, dilate_px))
+        mask = cv2.dilate(mask, kernel, iterations=1)
 
-    return cropped if cropped.size else img_bgr
+    return mask
 
 
-# =========================================================
-# Filling black holes (free/local)
-# =========================================================
-
-def _inpaint_black_regions(img_bgr: np.ndarray, *, black_threshold: int = 10) -> np.ndarray:
+def wrap_seam_blend(pano_bgr: np.ndarray, *, band: int = 96) -> np.ndarray:
     """
-    Fills internal black regions using OpenCV inpaint.
-    Good for holes created by warping/stitching.
-
-    black pixels: near (0,0,0) => inpaint mask
+    Makes left and right edges blend smoothly to support 360 loop.
+    Strategy:
+      - take a band from left and right
+      - cross-fade them
+      - apply result back to both sides
     """
-    h, w = img_bgr.shape[:2]
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-
-    # mask for near-black
-    mask = (gray <= black_threshold).astype(np.uint8) * 255
-
-    # clean mask: remove very thin noise, connect small gaps
-    kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_DILATE, kernel, iterations=1)
-
-    # If mask is mostly black => do nothing
-    black_ratio = float(np.count_nonzero(mask)) / float(h * w)
-    if black_ratio < 0.001:
-        return img_bgr
-
-    # inpaint
-    # TELEA generally looks more natural for texture continuation
-    out = cv2.inpaint(img_bgr, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
-    return out
-
-
-# =========================================================
-# 360 Seam: left/right match
-# =========================================================
-
-def _make_360_seamless(
-    pano_bgr: np.ndarray,
-    *,
-    search_steps: int = 48,
-    overlap_ratio: float = 0.08,
-    max_overlap_px: int = 240,
-) -> np.ndarray:
-    """
-    Makes panorama more suitable for 360 by:
-      1) Finding best horizontal roll so seam lands in lowest-difference area
-      2) Blending left/right edges over an overlap strip
-
-    Note: This is "best effort" for a generic stitched pano. True 360 capture
-    works best when photos cover full rotation with consistent exposure.
-    """
-    pano = pano_bgr.copy()
+    pano = _ensure_bgr_uint8(pano_bgr)
     h, w = pano.shape[:2]
+    band = int(max(8, min(band, w // 6)))
 
-    # Choose overlap width
-    overlap = int(min(max_overlap_px, max(32, w * overlap_ratio)))
-    overlap = min(overlap, w // 4)
+    left = pano[:, :band].copy()
+    right = pano[:, w - band:].copy()
 
-    # Downsample for seam cost search
-    small = pano
-    scale = 1.0
-    if w > 1400:
-        scale = 1400.0 / w
-        small = cv2.resize(pano, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    # Create alpha ramp
+    alpha = np.linspace(0.0, 1.0, band, dtype=np.float32).reshape(1, band, 1)
+    alpha = np.repeat(alpha, h, axis=0)
 
-    best_shift = _find_best_seam_shift(small, steps=search_steps, overlap=int(overlap * scale))
-    # Apply roll to full-res pano
-    pano = np.roll(pano, shift=best_shift, axis=1)
+    # Blend: left edge should look like right edge and vice versa
+    blended_left = (right.astype(np.float32) * (1.0 - alpha) + left.astype(np.float32) * alpha).astype(np.uint8)
+    blended_right = (right.astype(np.float32) * alpha + left.astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
 
-    # Edge blend on full-res
-    pano = _blend_left_right_edges(pano, overlap=overlap)
-
+    pano[:, :band] = blended_left
+    pano[:, w - band:] = blended_right
     return pano
 
 
-def _find_best_seam_shift(img_bgr: np.ndarray, *, steps: int, overlap: int) -> int:
+# =========================================================
+# OpenAI Inpaint
+# =========================================================
+
+def ai_inpaint_panorama(pano_bgr: np.ndarray, mask_u8: np.ndarray, *, prompt: str) -> np.ndarray:
     """
-    Find horizontal shift that minimizes difference between left and right edges.
-    We evaluate multiple candidate shifts and pick smallest edge-SSD over overlap strip.
+    Uses OpenAI Images Edit (inpaint) style call.
+    Needs:
+      OPENAI_API_KEY
+    Optional:
+      OPENAI_IMAGE_MODEL (default set below)
     """
-    h, w = img_bgr.shape[:2]
-    if overlap <= 0 or overlap >= w // 2:
-        return 0
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        # If key missing, fall back to classical inpaint (not as good)
+        return classical_inpaint(pano_bgr, mask_u8)
 
-    # use luminance for faster cost
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    model = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1").strip()
 
-    # sample candidates
-    # steps -> candidate shifts across width
-    # include 0
-    candidates = [int(round(i * w / steps)) for i in range(steps)]
-    candidates = sorted(set(candidates))
+    # Convert to PNG bytes for image + mask
+    img_png = _bgr_to_png_bytes(pano_bgr)
+    mask_png = _mask_to_png_bytes(mask_u8)
 
-    best_cost = float("inf")
-    best_shift = 0
+    # OpenAI Images Edit endpoint (multipart)
+    # Note: exact endpoint can vary; this one matches commonly used OpenAI Images API style.
+    url = "https://api.openai.com/v1/images/edits"
+    headers = {"Authorization": f"Bearer {api_key}"}
 
-    # precompute left/right strips for each shifted version efficiently:
-    # We'll roll and compute cost. On small image it’s fine.
-    for s in candidates:
-        rolled = np.roll(gray, shift=s, axis=1)
+    files = {
+        "image": ("image.png", img_png, "image/png"),
+        "mask": ("mask.png", mask_png, "image/png"),
+    }
+    data = {
+        "model": model,
+        "prompt": prompt,
+        # Keep same aspect ratio; request 1 result
+        "n": "1",
+        # Let backend decide size; pano is wide; many APIs accept "size" limited
+        # We omit size to allow server inference if supported.
+    }
 
-        left = rolled[:, :overlap]
-        right = rolled[:, -overlap:]
+    resp = requests.post(url, headers=headers, files=files, data=data, timeout=180)
+    if resp.status_code >= 300:
+        # fall back if API fails
+        return classical_inpaint(pano_bgr, mask_u8)
 
-        # compare left vs right (reverse right to align directionally)
-        right_rev = right[:, ::-1]
+    js = resp.json()
+    # Expected: data[0].b64_json
+    b64 = js["data"][0].get("b64_json")
+    if not b64:
+        # some variants return url
+        img_url = js["data"][0].get("url")
+        if img_url:
+            out = requests.get(img_url, timeout=120).content
+            return _png_bytes_to_bgr(out)
+        return classical_inpaint(pano_bgr, mask_u8)
 
-        diff = left - right_rev
-        cost = float(np.mean(diff * diff))
-
-        if cost < best_cost:
-            best_cost = cost
-            best_shift = s
-
-    return best_shift
+    out_bytes = base64.b64decode(b64)
+    return _png_bytes_to_bgr(out_bytes)
 
 
-def _blend_left_right_edges(img_bgr: np.ndarray, *, overlap: int) -> np.ndarray:
+def classical_inpaint(pano_bgr: np.ndarray, mask_u8: np.ndarray) -> np.ndarray:
     """
-    Blend left edge and right edge over overlap region.
-    We blend left strip with mirrored right strip to reduce seam.
+    Fallback: OpenCV inpaint. Lower quality, but prevents broken output.
     """
-    h, w = img_bgr.shape[:2]
-    if overlap <= 0 or overlap >= w // 2:
-        return img_bgr
-
-    out = img_bgr.copy()
-
-    left = out[:, :overlap].astype(np.float32)
-    right = out[:, -overlap:].astype(np.float32)
-
-    # mirror right to align features directionally
-    right_m = right[:, ::-1]
-
-    # alpha ramp 0..1 across overlap
-    alpha = np.linspace(0.0, 1.0, overlap, dtype=np.float32)[None, :, None]
-
-    blended = (1.0 - alpha) * right_m + alpha * left
-    blended = np.clip(blended, 0, 255).astype(np.uint8)
-
-    # write back
-    out[:, :overlap] = blended
-    out[:, -overlap:] = blended[:, ::-1]  # un-mirror back
-
+    pano = _ensure_bgr_uint8(pano_bgr)
+    mask = (mask_u8 > 0).astype(np.uint8) * 255
+    # TELEA tends to look better than NS for edges
+    out = cv2.inpaint(pano, mask, 3, cv2.INPAINT_TELEA)
     return out
 
 
 # =========================================================
-# Utils
+# Helpers
 # =========================================================
+
+def _prep_for_stitch(img_bgr: np.ndarray, *, max_side: int) -> np.ndarray:
+    img = _ensure_bgr_uint8(img_bgr)
+    h, w = img.shape[:2]
+    scale = max_side / float(max(h, w))
+    if scale < 1.0:
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    return img
+
+
+def _cap_width(img_bgr: np.ndarray, max_w: int) -> np.ndarray:
+    img = _ensure_bgr_uint8(img_bgr)
+    h, w = img.shape[:2]
+    if w <= max_w:
+        return img
+    scale = max_w / float(w)
+    new_h = int(h * scale)
+    return cv2.resize(img, (max_w, new_h), interpolation=cv2.INTER_AREA)
+
+
+def _morph_close(mask: np.ndarray, *, k: int = 7) -> np.ndarray:
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+
+def _bgr_to_png_bytes(img_bgr: np.ndarray) -> bytes:
+    img = cv2.cvtColor(_ensure_bgr_uint8(img_bgr), cv2.COLOR_BGR2RGB)
+    pil = Image.fromarray(img)
+    buf = io.BytesIO()
+    pil.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _mask_to_png_bytes(mask_u8: np.ndarray) -> bytes:
+    m = (mask_u8 > 0).astype(np.uint8) * 255
+    pil = Image.fromarray(m, mode="L")
+    buf = io.BytesIO()
+    pil.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _png_bytes_to_bgr(png_bytes: bytes) -> np.ndarray:
+    pil = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+    arr = np.array(pil)
+    bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+    return _ensure_bgr_uint8(bgr)
+
 
 def _ensure_bgr_uint8(img: np.ndarray) -> np.ndarray:
     if img is None:
         raise ValueError("image is None")
-
     if img.ndim == 2:
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-
     if img.shape[2] == 4:
         img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-
     if img.dtype != np.uint8:
         img = np.clip(img, 0, 255).astype(np.uint8)
-
     return img
