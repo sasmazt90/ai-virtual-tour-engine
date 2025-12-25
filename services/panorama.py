@@ -1,223 +1,270 @@
-import os
-from typing import List, Tuple, Optional
+from _future_ import annotations
+
+import math
+from typing import List, Tuple, Optional, Dict, Any
 
 import cv2
 import numpy as np
 
 
-# =========================
-# CONFIG
-# =========================
+# =========================================================
+# Core panorama builder
+# =========================================================
 
-# 360 seam fix için kenarlardan kaç px'lik bölgeyi blend edeceğiz
-DEFAULT_SEAM_BLEND_PX = 160
-
-# Siyah alan tespiti için eşik
-BLACK_THRESH = 12
-
-# Minimum kabul edilen pano boyutu
-MIN_W = 900
-MIN_H = 400
-
-
-# =========================
-# BASIC HELPERS
-# =========================
-
-def _ensure_rgb(img: np.ndarray) -> np.ndarray:
-    if img is None:
-        raise ValueError("Image is None")
-    if len(img.shape) == 2:
-        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    return img
-
-def _read_images(paths: List[str]) -> List[np.ndarray]:
-    imgs = []
-    for p in paths:
-        im = cv2.imread(p)
-        if im is None:
-            raise ValueError(f"Could not read image: {p}")
-        imgs.append(_ensure_rgb(im))
-    return imgs
-
-def _is_probably_pano(img: np.ndarray) -> bool:
+def build_panorama(
+    images_bgr: List[np.ndarray],
+    *,
+    try_scans_fallback: bool = True,
+    inpaint_black: bool = True,
+    enforce_360_seam: bool = True,
+) -> np.ndarray:
     """
-    Equirectangular panoramalar genelde 2:1 oranına yakın olur.
-    Bu sadece heuristik (tek görsel pano verilirse stitch yapmadan geçebiliriz).
+    Build panorama from a list of BGR images.
+
+    Pipeline:
+      1) Stitch (OpenCV Stitcher)
+      2) Crop black borders
+      3) Fill black holes (inpaint)
+      4) 360 seam enforcement (wrap-aware seam selection + edge blending)
+
+    Returns: panorama BGR image
     """
-    h, w = img.shape[:2]
-    if h == 0:
-        return False
-    ratio = w / float(h)
-    return 1.75 <= ratio <= 2.35 and w >= MIN_W and h >= MIN_H
+    if not images_bgr or len(images_bgr) < 2:
+        raise ValueError("build_panorama requires at least 2 images")
 
-def _black_mask(img: np.ndarray) -> np.ndarray:
-    """
-    Siyah/boş bölgeleri maskelemek için.
-    """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    mask = (gray > BLACK_THRESH).astype(np.uint8) * 255
-    return mask
+    imgs = [_ensure_bgr_uint8(i) for i in images_bgr]
+    pano = _stitch_opencv(imgs, try_scans_fallback=try_scans_fallback)
 
-def _crop_to_content(img: np.ndarray) -> np.ndarray:
-    """
-    Siyah border'ları kırp.
-    """
-    mask = _black_mask(img)
-    coords = cv2.findNonZero(mask)
-    if coords is None:
-        return img
+    pano = _crop_black_borders(pano)
 
-    x, y, w, h = cv2.boundingRect(coords)
-    # Güvenlik: çok agresif kırpma olmasın
-    if w < 200 or h < 200:
-        return img
-    return img[y:y+h, x:x+w]
+    if inpaint_black:
+        pano = _inpaint_black_regions(pano)
 
-def _linear_blend(a: np.ndarray, b: np.ndarray, axis: int = 1) -> np.ndarray:
-    """
-    a ve b aynı boyutta olmalı.
-    axis=1 → yatay blend (sol-sağ)
-    """
-    if a.shape != b.shape:
-        raise ValueError("Blend inputs must have the same shape")
+    pano = _crop_black_borders(pano)
 
-    h, w = a.shape[:2]
-    if axis == 1:
-        ramp = np.linspace(0.0, 1.0, w, dtype=np.float32)[None, :, None]
-        ramp = np.repeat(ramp, h, axis=0)
-    else:
-        ramp = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None, None]
-        ramp = np.repeat(ramp, w, axis=1)
-
-    a_f = a.astype(np.float32)
-    b_f = b.astype(np.float32)
-    out = (1.0 - ramp) * a_f + ramp * b_f
-    return np.clip(out, 0, 255).astype(np.uint8)
-
-
-# =========================
-# 360 SEAM FIX
-# =========================
-
-def make_360_seamless(pano: np.ndarray, blend_px: int = DEFAULT_SEAM_BLEND_PX) -> np.ndarray:
-    """
-    360 görüntü için kritik: sol ve sağ ucu görsel olarak yaklaştır.
-    Bunu kenarlardaki dar bir bandı karşılıklı blend ederek yapıyoruz.
-    Bu "matematiksel olarak aynı piksel" garanti etmez ama pratikte
-    viewer'da seam'i dramatik şekilde azaltır.
-
-    Not:
-    - Pano zaten iyi stitch edilmiş olmalı.
-    - blend_px çok yüksek olursa detaylar "yumuşar".
-    """
-    pano = _ensure_rgb(pano)
-    h, w = pano.shape[:2]
-
-    if w < 2 * blend_px + 10:
-        # Çok küçük pano, blend yapma
-        return pano
-
-    left_band = pano[:, :blend_px].copy()
-    right_band = pano[:, w - blend_px:].copy()
-
-    # Sağ bandı sol ile, sol bandı sağ ile blend ediyoruz:
-    blended_left = _linear_blend(left_band, right_band, axis=1)
-    blended_right = _linear_blend(right_band, left_band, axis=1)
-
-    out = pano.copy()
-    out[:, :blend_px] = blended_left
-    out[:, w - blend_px:] = blended_right
-    return out
-
-
-# =========================
-# STITCHING
-# =========================
-
-def stitch_to_panorama(image_paths: List[str]) -> np.ndarray:
-    """
-    Verilen image list'ini panorama haline getirir.
-    - 1 görsel geldiyse ve pano gibi görünüyorsa direkt döner.
-    - Stitch başarısız olursa hata fırlatır.
-    """
-    if not image_paths:
-        raise ValueError("No images provided to stitch")
-
-    imgs = _read_images(image_paths)
-
-    if len(imgs) == 1:
-        # Tek görsel geldiyse: pano ise pano kabul et, değilse yine de döndür (engine karar versin)
-        return imgs[0]
-
-    # OpenCV Stitcher (panorama)
-    try:
-        stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
-    except Exception:
-        stitcher = cv2.Stitcher.create(cv2.Stitcher_PANORAMA)
-
-    status, pano = stitcher.stitch(imgs)
-
-    if status != cv2.Stitcher_OK or pano is None:
-        raise RuntimeError(f"Stitch failed with status={status}")
-
-    pano = _ensure_rgb(pano)
-    if pano.shape[1] < MIN_W or pano.shape[0] < MIN_H:
-        raise RuntimeError("Panorama output is too small — likely bad match set")
+    if enforce_360_seam:
+        pano = _make_360_seamless(pano)
 
     return pano
 
 
-def build_panorama(
-    image_paths: List[str],
-    out_path: str,
-    apply_crop: bool = True,
-    apply_360_seam_fix: bool = True,
-    seam_blend_px: int = DEFAULT_SEAM_BLEND_PX
-) -> str:
+# =========================================================
+# Stitching
+# =========================================================
+
+def _stitch_opencv(images_bgr: List[np.ndarray], *, try_scans_fallback: bool) -> np.ndarray:
     """
-    Full pipeline:
-    1) stitch
-    2) crop black borders
-    3) optional: make 360 seamless
-    4) save output
-
-    Returns: out_path
+    Uses OpenCV Stitcher in PANORAMA mode; optionally retries SCANS.
     """
-    pano = stitch_to_panorama(image_paths)
+    stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
+    status, pano = stitcher.stitch(images_bgr)
 
-    # Eğer tek görsel pano değilse kırpma yine de işe yarayabilir
-    if apply_crop:
-        pano = _crop_to_content(pano)
+    if status == cv2.Stitcher_OK and pano is not None:
+        return pano
 
-    # 360 için: sol/sağ seam blending
-    if apply_360_seam_fix:
-        pano = make_360_seamless(pano, blend_px=seam_blend_px)
+    if try_scans_fallback:
+        stitcher2 = cv2.Stitcher_create(cv2.Stitcher_SCANS)
+        status2, pano2 = stitcher2.stitch(images_bgr)
+        if status2 == cv2.Stitcher_OK and pano2 is not None:
+            return pano2
 
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-
-    ok = cv2.imwrite(out_path, pano)
-    if not ok:
-        raise RuntimeError(f"Failed to write panorama to: {out_path}")
-
-    return out_path
+    raise RuntimeError(f"OpenCV stitching failed (status={status}).")
 
 
-# =========================
-# OPTIONAL: QUALITY CHECK
-# =========================
+# =========================================================
+# Black border cropping
+# =========================================================
 
-def estimate_seam_difference(pano: np.ndarray, sample_px: int = 12) -> float:
+def _crop_black_borders(img_bgr: np.ndarray, *, threshold: int = 8) -> np.ndarray:
     """
-    Pano'nun sol ve sağ uçları ne kadar farklı? (0 iyi, büyük kötü)
-    Bu bir debug metriği, viewer seam riskini ölçmek için.
+    Crops outer black borders by finding bounding box of non-black pixels.
     """
-    pano = _ensure_rgb(pano)
+    if img_bgr is None:
+        raise ValueError("img is None")
+
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+
+    # Morph close to remove tiny holes
+    kernel = np.ones((7, 7), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    coords = cv2.findNonZero(mask)
+    if coords is None:
+        return img_bgr  # nothing to crop
+
+    x, y, w, h = cv2.boundingRect(coords)
+    # safety
+    x2 = min(x + w, img_bgr.shape[1])
+    y2 = min(y + h, img_bgr.shape[0])
+    cropped = img_bgr[y:y2, x:x2].copy()
+
+    return cropped if cropped.size else img_bgr
+
+
+# =========================================================
+# Filling black holes (free/local)
+# =========================================================
+
+def _inpaint_black_regions(img_bgr: np.ndarray, *, black_threshold: int = 10) -> np.ndarray:
+    """
+    Fills internal black regions using OpenCV inpaint.
+    Good for holes created by warping/stitching.
+
+    black pixels: near (0,0,0) => inpaint mask
+    """
+    h, w = img_bgr.shape[:2]
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+    # mask for near-black
+    mask = (gray <= black_threshold).astype(np.uint8) * 255
+
+    # clean mask: remove very thin noise, connect small gaps
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_DILATE, kernel, iterations=1)
+
+    # If mask is mostly black => do nothing
+    black_ratio = float(np.count_nonzero(mask)) / float(h * w)
+    if black_ratio < 0.001:
+        return img_bgr
+
+    # inpaint
+    # TELEA generally looks more natural for texture continuation
+    out = cv2.inpaint(img_bgr, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+    return out
+
+
+# =========================================================
+# 360 Seam: left/right match
+# =========================================================
+
+def _make_360_seamless(
+    pano_bgr: np.ndarray,
+    *,
+    search_steps: int = 48,
+    overlap_ratio: float = 0.08,
+    max_overlap_px: int = 240,
+) -> np.ndarray:
+    """
+    Makes panorama more suitable for 360 by:
+      1) Finding best horizontal roll so seam lands in lowest-difference area
+      2) Blending left/right edges over an overlap strip
+
+    Note: This is "best effort" for a generic stitched pano. True 360 capture
+    works best when photos cover full rotation with consistent exposure.
+    """
+    pano = pano_bgr.copy()
     h, w = pano.shape[:2]
-    sample_px = max(2, min(sample_px, w // 10))
 
-    left = pano[:, :sample_px].astype(np.float32)
-    right = pano[:, w - sample_px:].astype(np.float32)
+    # Choose overlap width
+    overlap = int(min(max_overlap_px, max(32, w * overlap_ratio)))
+    overlap = min(overlap, w // 4)
 
-    # Mean absolute error
-    return float(np.mean(np.abs(left - right)))
+    # Downsample for seam cost search
+    small = pano
+    scale = 1.0
+    if w > 1400:
+        scale = 1400.0 / w
+        small = cv2.resize(pano, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
+    best_shift = _find_best_seam_shift(small, steps=search_steps, overlap=int(overlap * scale))
+    # Apply roll to full-res pano
+    pano = np.roll(pano, shift=best_shift, axis=1)
+
+    # Edge blend on full-res
+    pano = _blend_left_right_edges(pano, overlap=overlap)
+
+    return pano
+
+
+def _find_best_seam_shift(img_bgr: np.ndarray, *, steps: int, overlap: int) -> int:
+    """
+    Find horizontal shift that minimizes difference between left and right edges.
+    We evaluate multiple candidate shifts and pick smallest edge-SSD over overlap strip.
+    """
+    h, w = img_bgr.shape[:2]
+    if overlap <= 0 or overlap >= w // 2:
+        return 0
+
+    # use luminance for faster cost
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    # sample candidates
+    # steps -> candidate shifts across width
+    # include 0
+    candidates = [int(round(i * w / steps)) for i in range(steps)]
+    candidates = sorted(set(candidates))
+
+    best_cost = float("inf")
+    best_shift = 0
+
+    # precompute left/right strips for each shifted version efficiently:
+    # We'll roll and compute cost. On small image it’s fine.
+    for s in candidates:
+        rolled = np.roll(gray, shift=s, axis=1)
+
+        left = rolled[:, :overlap]
+        right = rolled[:, -overlap:]
+
+        # compare left vs right (reverse right to align directionally)
+        right_rev = right[:, ::-1]
+
+        diff = left - right_rev
+        cost = float(np.mean(diff * diff))
+
+        if cost < best_cost:
+            best_cost = cost
+            best_shift = s
+
+    return best_shift
+
+
+def _blend_left_right_edges(img_bgr: np.ndarray, *, overlap: int) -> np.ndarray:
+    """
+    Blend left edge and right edge over overlap region.
+    We blend left strip with mirrored right strip to reduce seam.
+    """
+    h, w = img_bgr.shape[:2]
+    if overlap <= 0 or overlap >= w // 2:
+        return img_bgr
+
+    out = img_bgr.copy()
+
+    left = out[:, :overlap].astype(np.float32)
+    right = out[:, -overlap:].astype(np.float32)
+
+    # mirror right to align features directionally
+    right_m = right[:, ::-1]
+
+    # alpha ramp 0..1 across overlap
+    alpha = np.linspace(0.0, 1.0, overlap, dtype=np.float32)[None, :, None]
+
+    blended = (1.0 - alpha) * right_m + alpha * left
+    blended = np.clip(blended, 0, 255).astype(np.uint8)
+
+    # write back
+    out[:, :overlap] = blended
+    out[:, -overlap:] = blended[:, ::-1]  # un-mirror back
+
+    return out
+
+
+# =========================================================
+# Utils
+# =========================================================
+
+def _ensure_bgr_uint8(img: np.ndarray) -> np.ndarray:
+    if img is None:
+        raise ValueError("image is None")
+
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+    if img.shape[2] == 4:
+        img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+
+    if img.dtype != np.uint8:
+        img = np.clip(img, 0, 255).astype(np.uint8)
+
+    return img
