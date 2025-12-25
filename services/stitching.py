@@ -1,26 +1,26 @@
+from typing import List
 import cv2
 import numpy as np
-from typing import List
 
 
-def _prep_for_stitch(img: np.ndarray, max_side: int) -> np.ndarray:
-    h, w = img.shape[:2]
-    scale = max_side / max(h, w)
-    if scale < 1.0:
-        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-    return img
+def stitch_images(images_bgr: List[np.ndarray]) -> np.ndarray:
+    """
+    Low-level stitching helper
+    """
+    if len(images_bgr) < 2:
+        raise ValueError("Need at least 2 images to stitch")
 
-
-def stitch_panorama(images_bgr: List[np.ndarray], stitcher_mode: int, max_side: int) -> np.ndarray:
-    imgs = [_prep_for_stitch(img, max_side) for img in images_bgr]
-
-    stitcher = cv2.Stitcher_create(stitcher_mode)
-    status, pano = stitcher.stitch(imgs)
+    stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
+    status, pano = stitcher.stitch(images_bgr)
 
     if status != cv2.Stitcher_OK or pano is None:
-        raise RuntimeError(f"OpenCV stitching failed with status {status}")
-
-    if pano.dtype != np.uint8:
-        pano = pano.clip(0, 255).astype(np.uint8)
+        raise RuntimeError(f"OpenCV stitching failed (status={status})")
 
     return pano
+
+
+def stitch_images_to_panorama(images_bgr: List[np.ndarray]) -> np.ndarray:
+    """
+    Backward-compatible alias used by app.py
+    """
+    return stitch_images(images_bgr)
