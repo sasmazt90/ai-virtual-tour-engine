@@ -1,21 +1,76 @@
 import os
-from typing import BinaryIO
+import uuid
+from typing import Optional
 
-BASE_DIR = os.getenv("STORAGE_DIR", "/tmp/virtual-tour-storage")
-
-
-def ensure_dir(path: str):
-    os.makedirs(path, exist_ok=True)
+import cv2
+import numpy as np
 
 
-def save_file(file: BinaryIO, filename: str) -> str:
-    ensure_dir(BASE_DIR)
-    path = os.path.join(BASE_DIR, filename)
-    with open(path, "wb") as f:
-        f.write(file.read())
+# =========================================================
+# Storage config
+# =========================================================
+
+BASE_STORAGE_DIR = os.getenv("STORAGE_DIR", "/app/data")
+IMAGES_DIR = os.path.join(BASE_STORAGE_DIR, "images")
+
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
+
+# =========================================================
+# Public API (IMPORT EDİLENLER)
+# =========================================================
+
+def save_image(
+    image: np.ndarray,
+    *,
+    prefix: str = "img",
+    ext: str = ".jpg"
+) -> str:
+    """
+    Saves an image to disk and returns the absolute file path.
+
+    Used by:
+      app.py
+      pipeline.py
+    """
+    if image is None or not isinstance(image, np.ndarray):
+        raise ValueError("save_image expects a numpy ndarray")
+
+    filename = f"{prefix}_{uuid.uuid4().hex}{ext}"
+    path = os.path.join(IMAGES_DIR, filename)
+
+    success = cv2.imwrite(path, image)
+    if not success:
+        raise IOError(f"Failed to write image to {path}")
+
     return path
 
 
-def load_file(path: str) -> bytes:
-    with open(path, "rb") as f:
-        return f.read()
+def load_image(path: str) -> np.ndarray:
+    """
+    Loads an image from disk (BGR).
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Image not found: {path}")
+
+    img = cv2.imread(path, cv2.IMREAD_COLOR)
+    if img is None:
+        raise IOError(f"Failed to read image: {path}")
+
+    return img
+
+
+# =========================================================
+# Optional helpers (future-proof)
+# =========================================================
+
+def delete_image(path: str) -> None:
+    if path and os.path.exists(path):
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+
+def ensure_storage_ready() -> None:
+    os.makedirs(IMAGES_DIR, exist_ok=True)
