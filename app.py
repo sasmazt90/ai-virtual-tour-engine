@@ -11,7 +11,7 @@ from services.grouping import group_images_by_room
 from services.pipeline import build_panorama_pipeline
 from services.storage import save_upload_file, ensure_output_dir
 
-app = FastAPI(title="AI Virtual Tour Engine", version="1.0.0")
+app = FastAPI(title="AI Virtual Tour Engine", version="1.0.1")
 
 MAX_FILES = 50
 
@@ -50,6 +50,7 @@ async def create_panorama(
             await save_upload_file(f, dst)
             image_paths.append(dst)
 
+        # Room-agnostic clustering (no labels, no fixed room count)
         rooms = group_images_by_room(image_paths)
 
         # Pipeline blocking -> thread
