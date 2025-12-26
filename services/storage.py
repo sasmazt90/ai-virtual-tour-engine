@@ -1,31 +1,59 @@
-import os
-import shutil
-import uuid
+# ai-virtual-tour-engine/services/storage.py
+from __future__ import annotations
+
 from fastapi import UploadFile
-from fastapi.responses import FileResponse
+import os
+import uuid
+from typing import Optional
 
-DATA_DIR = "/data"
-os.makedirs(DATA_DIR, exist_ok=True)
-
-
-async def save_image(upload_file: UploadFile, dst_path: str):
-    with open(dst_path, "wb") as buffer:
-        shutil.copyfileobj(upload_file.file, buffer)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 
 
-def persist_panorama(tmp_path: str) -> str:
+def ensure_output_dir() -> str:
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    return OUTPUT_DIR
+
+
+async def save_upload_file(upload: UploadFile, dst_path: str) -> None:
     """
-    /tmp/...jpg  →  /data/pano_<uuid>.jpg
+    UploadFile -> disk
     """
-    ext = os.path.splitext(tmp_path)[1]
-    filename = f"pano_{uuid.uuid4().hex}{ext}"
-    final_path = os.path.join(DATA_DIR, filename)
-    shutil.copy(tmp_path, final_path)
-    return filename
+    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+    with open(dst_path, "wb") as out:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
 
 
-def serve_file(filename: str):
-    path = os.path.join(DATA_DIR, filename)
-    if not os.path.exists(path):
-        return None
-    return FileResponse(path, media_type="image/jpeg")
+def persist_image_bytes(data: bytes, ext: str = ".jpg", prefix: str = "panorama") -> str:
+    """
+    Save bytes into outputs and return public URL path (/static/...)
+    """
+    ensure_output_dir()
+    ext = ext if ext.startswith(".") else f".{ext}"
+    name = f"{prefix}_{uuid.uuid4().hex}{ext}"
+    path = os.path.join(OUTPUT_DIR, name)
+    with open(path, "wb") as f:
+        f.write(data)
+    return f"/static/{name}"
+
+
+def persist_image_path(src_path: str, ext: Optional[str] = None, prefix: str = "panorama") -> str:
+    """
+    Copy an existing image file into outputs and return public URL path.
+    """
+    ensure_output_dir()
+    if ext is None:
+        _, e = os.path.splitext(src_path)
+        ext = e or ".jpg"
+    ext = ext if ext.startswith(".") else f".{ext}"
+    name = f"{prefix}_{uuid.uuid4().hex}{ext}"
+    dst = os.path.join(OUTPUT_DIR, name)
+
+    with open(src_path, "rb") as r, open(dst, "wb") as w:
+        w.write(r.read())
+
+    return f"/static/{name}"
