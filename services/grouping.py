@@ -76,7 +76,7 @@ def group_images_by_room(image_paths: List[str]) -> Dict[str, Any]:
     # Greedy clustering:
     # Start a new cluster when image is not close to any existing cluster centroid.
     # Threshold chosen to be conservative (avoid merging different rooms).
-    THRESH = 0.28
+    THRESH = 0.40
 
     clusters: List[Dict[str, Any]] = []
     for idx, path in enumerate(valid):
