@@ -20,44 +20,48 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/panorama")
+@app.post(
+    "/panorama",
+    summary="Create panorama(s) from uploaded room images",
+    description="Upload between 1 and 50 images. Images will be grouped into rooms and processed into panoramas."
+)
 async def create_panorama(
-    files: List[UploadFile] = File(
-        ...,
-        description="Upload between 1 and 50 images"
-    )
+    files: List[UploadFile] = File(...)
 ):
-    # 🧹 Swagger'ın eklediği string/boş item'ları temizle
-    files = [
+    # 🔒 Swagger bazen boş / string item ekleyebiliyor
+    valid_files = [
         f for f in files
-        if hasattr(f, "filename") and f.filename
+        if f is not None and hasattr(f, "filename") and f.filename
     ]
 
-    if not files:
-        raise HTTPException(status_code=400, detail="No valid files uploaded")
+    if not valid_files:
+        raise HTTPException(
+            status_code=400,
+            detail="No valid image files uploaded"
+        )
 
-    if len(files) > MAX_FILES:
+    if len(valid_files) > MAX_FILES:
         raise HTTPException(
             status_code=400,
             detail=f"Maximum {MAX_FILES} images allowed"
         )
 
-    # 📁 Temp klasör
+    # 📁 Temp çalışma alanı
     with tempfile.TemporaryDirectory() as tmpdir:
         image_paths = []
 
-        for file in files:
-            path = os.path.join(tmpdir, file.filename)
-            await save_image(file, path)
-            image_paths.append(path)
+        for file in valid_files:
+            file_path = os.path.join(tmpdir, file.filename)
+            await save_image(file, file_path)
+            image_paths.append(file_path)
 
-        # 🧠 Oda gruplama
+        # 🧠 Görselleri odaya göre grupla
         rooms = group_images_by_room(image_paths)
 
-        # 🧩 Panorama pipeline
+        # 🧩 Panorama üretim pipeline'ı
         panoramas = build_panorama_pipeline(rooms)
 
     return {
-        "rooms": rooms,
+        "room_groups": rooms,
         "panoramas": panoramas
     }
