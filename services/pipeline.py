@@ -1,46 +1,49 @@
-# services/pipeline.py
-
-from typing import Dict, List
 from services.stitching import stitch_images
+from services.ai_panorama import generate_ai_panorama
 
-def build_panorama_pipeline(rooms: Dict) -> List[Dict]:
-    """
-    Takes grouped rooms and builds panoramas.
-    Rooms with < 2 images are skipped safely.
-    """
+def build_panorama_pipeline(rooms: dict):
+    results = []
 
-    panoramas = []
+    for room in rooms["rooms"]:
+        room_id = room["room_id"]
+        images = room["images"]
+        count = len(images)
 
-    for room in rooms.get("rooms", []):
-        room_id = room.get("room_id")
-        images = room.get("images", [])
-
-        # 🚫 En kritik fix: 1 fotoğraflı odaları atla
-        if len(images) < 2:
-            panoramas.append({
-                "room_id": room_id,
-                "status": "skipped",
-                "reason": "not enough images",
-                "image_count": len(images)
-            })
-            continue
-
-        try:
-            panorama_path = stitch_images(images)
-
-            panoramas.append({
+        # 🔴 AI MODE (1–3 foto)
+        if count < 4:
+            panorama_path = generate_ai_panorama(images)
+            results.append({
                 "room_id": room_id,
                 "status": "ok",
                 "panorama": panorama_path,
-                "image_count": len(images)
+                "image_count": count,
+                "mode": "ai"
             })
+            continue
 
-        except Exception as e:
-            panoramas.append({
+        # 🟢 OPENCV MODE (4+ foto)
+        try:
+            panorama_path = stitch_images(images)
+            results.append({
                 "room_id": room_id,
-                "status": "error",
-                "error": str(e),
-                "image_count": len(images)
+                "status": "ok",
+                "panorama": panorama_path,
+                "image_count": count,
+                "mode": "opencv"
+            })
+        except Exception as e:
+            # 🔁 FALLBACK AI
+            panorama_path = generate_ai_panorama(images)
+            results.append({
+                "room_id": room_id,
+                "status": "ok",
+                "panorama": panorama_path,
+                "image_count": count,
+                "mode": "ai_fallback"
             })
 
-    return panoramas
+    return {
+        "room_count": len(results),
+        "panorama_count": len(results),
+        "panoramas": results
+    }
