@@ -1,35 +1,34 @@
-# services/stitching.py
-
 import cv2
-import os
 import uuid
-from typing import List
 
-def stitch_images(image_paths: List[str]) -> str:
-    """
-    Takes a list of image file paths and returns a stitched panorama path.
-    """
 
+def stitch_images(image_paths: list[str]) -> str:
+    """
+    Returns a panorama image file path (/tmp/...jpg)
+
+    IMPORTANT:
+    - Requires >= 2 images (guarded)
+    - Loads cv2 images (numpy arrays) before passing to stitcher
+    """
     if len(image_paths) < 2:
-        raise ValueError("Need at least 2 images to stitch")
+        raise ValueError("Not enough images for OpenCV stitching")
 
     images = []
-
-    for path in image_paths:
-        img = cv2.imread(path)
+    for p in image_paths:
+        img = cv2.imread(p)
         if img is None:
-            raise ValueError(f"Failed to read image: {path}")
+            raise ValueError(f"Failed to load image: {p}")
         images.append(img)
 
-    stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
-
+    stitcher = cv2.Stitcher_create()
     status, pano = stitcher.stitch(images)
 
-    if status != cv2.Stitcher_OK:
+    if status != cv2.Stitcher_OK or pano is None:
         raise RuntimeError(f"OpenCV stitching failed with status {status}")
 
-    # 📦 Output path
-    out_path = f"/tmp/panorama_{uuid.uuid4().hex}.jpg"
-    cv2.imwrite(out_path, pano)
+    output = f"/tmp/pano_{uuid.uuid4().hex}.jpg"
+    ok = cv2.imwrite(output, pano)
+    if not ok:
+        raise RuntimeError("Failed to write panorama output image")
 
-    return out_path
+    return output
