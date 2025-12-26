@@ -2,7 +2,6 @@ from typing import List, Dict
 import numpy as np
 from sklearn.cluster import DBSCAN
 
-# Lazy-loaded global model
 _model = None
 
 
@@ -11,13 +10,11 @@ def _load_clip():
     if _model is not None:
         return _model
 
-    import torch
     import open_clip
 
     device = "cpu"
     model, _, preprocess = open_clip.create_model_and_transforms(
-        "ViT-B-32",
-        pretrained="laion2b_s34b_b79k"
+        "ViT-B-32", pretrained="laion2b_s34b_b79k"
     )
     model.eval()
     model.to(device)
@@ -31,40 +28,41 @@ def _embed_image(path: str) -> np.ndarray:
     import torch
 
     model, preprocess, device = _load_clip()
-
     img = Image.open(path).convert("RGB")
-    tensor = preprocess(img).unsqueeze(0).to(device)
+    x = preprocess(img).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        features = model.encode_image(tensor)
-        features = features / features.norm(dim=-1, keepdim=True)
-
-    return features.cpu().numpy()[0]
+        feat = model.encode_image(x)
+        feat = feat / feat.norm(dim=-1, keepdim=True)
+    return feat.cpu().numpy()[0]
 
 
 def group_images_by_room(image_paths: List[str]) -> Dict:
     """
-    Groups images into rooms using CLIP embeddings + DBSCAN clustering.
+    Returns clusters like:
+    { "rooms": [ { "room_id": 0, "images": [...] }, ... ] }
     """
-    if not image_paths:
+    if len(image_paths) == 0:
         return {"rooms": []}
 
-    embeddings = [_embed_image(p) for p in image_paths]
-    X = np.stack(embeddings, axis=0)
+    embs = []
+    for p in image_paths:
+        embs.append(_embed_image(p))
+    X = np.stack(embs, axis=0)
 
-    clustering = DBSCAN(
-        eps=0.25,
-        min_samples=1,
-        metric="cosine"
-    ).fit(X)
+    # DBSCAN with cosine distance
+    clustering = DBSCAN(eps=0.25, min_samples=1, metric="cosine").fit(X)
+    labels = clustering.labels_.tolist()
 
     rooms = {}
-    for path, label in zip(image_paths, clustering.labels_):
-        rooms.setdefault(int(label), []).append(path)
+    for p, lab in zip(image_paths, labels):
+        rooms.setdefault(lab, []).append(p)
 
-    return {
-        "rooms": [
-            {"room_id": room_id, "images": imgs}
-            for room_id, imgs in rooms.items()
-        ]
-    }
+    out = {"rooms": []}
+    for lab, imgs in rooms.items():
+        out["rooms"].append({
+            "room_id": int(lab),
+            "images": imgs
+        })
+
+    return out
