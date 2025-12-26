@@ -1,63 +1,70 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from typing import List
-import tempfile
-import os
+from typing import List, Dict
+import numpy as np
+from sklearn.cluster import DBSCAN
 
-from services.grouping import group_images_by_room
-from services.pipeline import build_panorama_pipeline
-from services.storage import save_image
-
-app = FastAPI(
-    title="AI Virtual Tour Engine",
-    version="1.0.0"
-)
-
-MAX_FILES = 50
+# Lazy-loaded global model
+_model = None
 
 
-@app.get("/")
-def health():
-    return {"status": "ok"}
+def _load_clip():
+    global _model
+    if _model is not None:
+        return _model
 
+    import torch
+    import open_clip
 
-@app.post("/panorama")
-async def create_panorama(
-    files: List[UploadFile] = File(
-        ...,
-        description="Upload between 1 and 50 images"
+    device = "cpu"
+    model, _, preprocess = open_clip.create_model_and_transforms(
+        "ViT-B-32",
+        pretrained="laion2b_s34b_b79k"
     )
-):
-    # 🧹 Swagger'ın eklediği string/boş item'ları temizle
-    files = [
-        f for f in files
-        if hasattr(f, "filename") and f.filename
-    ]
+    model.eval()
+    model.to(device)
 
-    if not files:
-        raise HTTPException(status_code=400, detail="No valid files uploaded")
+    _model = (model, preprocess, device)
+    return _model
 
-    if len(files) > MAX_FILES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Maximum {MAX_FILES} images allowed"
-        )
 
-    # 📁 Temp klasör
-    with tempfile.TemporaryDirectory() as tmpdir:
-        image_paths = []
+def _embed_image(path: str) -> np.ndarray:
+    from PIL import Image
+    import torch
 
-        for file in files:
-            path = os.path.join(tmpdir, file.filename)
-            await save_image(file, path)
-            image_paths.append(path)
+    model, preprocess, device = _load_clip()
 
-        # 🧠 Oda gruplama
-        rooms = group_images_by_room(image_paths)
+    img = Image.open(path).convert("RGB")
+    tensor = preprocess(img).unsqueeze(0).to(device)
 
-        # 🧩 Panorama pipeline
-        panoramas = build_panorama_pipeline(rooms)
+    with torch.no_grad():
+        features = model.encode_image(tensor)
+        features = features / features.norm(dim=-1, keepdim=True)
+
+    return features.cpu().numpy()[0]
+
+
+def group_images_by_room(image_paths: List[str]) -> Dict:
+    """
+    Groups images into rooms using CLIP embeddings + DBSCAN clustering.
+    """
+    if not image_paths:
+        return {"rooms": []}
+
+    embeddings = [_embed_image(p) for p in image_paths]
+    X = np.stack(embeddings, axis=0)
+
+    clustering = DBSCAN(
+        eps=0.25,
+        min_samples=1,
+        metric="cosine"
+    ).fit(X)
+
+    rooms = {}
+    for path, label in zip(image_paths, clustering.labels_):
+        rooms.setdefault(int(label), []).append(path)
 
     return {
-        "rooms": rooms,
-        "panoramas": panoramas
+        "rooms": [
+            {"room_id": room_id, "images": imgs}
+            for room_id, imgs in rooms.items()
+        ]
     }
