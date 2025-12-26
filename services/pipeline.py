@@ -1,37 +1,46 @@
-import cv2
-import numpy as np
-from typing import List
+# services/pipeline.py
 
+from typing import Dict, List
 from services.stitching import stitch_images
-from services.seam import make_seamless_horizontal
 
-
-def detect_black_areas(image: np.ndarray, threshold: int = 10) -> np.ndarray:
+def build_panorama_pipeline(rooms: Dict) -> List[Dict]:
     """
-    Returns a mask where black/unfilled areas exist.
+    Takes grouped rooms and builds panoramas.
+    Rooms with < 2 images are skipped safely.
     """
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    mask = gray < threshold
-    return mask.astype(np.uint8) * 255
 
+    panoramas = []
 
-def inpaint_black_areas(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """
-    Classical inpainting (AI hook later).
-    """
-    return cv2.inpaint(image, mask, 3, cv2.INPAINT_TELEA)
+    for room in rooms.get("rooms", []):
+        room_id = room.get("room_id")
+        images = room.get("images", [])
 
+        # 🚫 En kritik fix: 1 fotoğraflı odaları atla
+        if len(images) < 2:
+            panoramas.append({
+                "room_id": room_id,
+                "status": "skipped",
+                "reason": "not enough images",
+                "image_count": len(images)
+            })
+            continue
 
-def build_panorama_pipeline(images: List[np.ndarray]) -> np.ndarray:
-    """
-    Full deterministic panorama pipeline.
-    """
-    panorama = stitch_images(images)
+        try:
+            panorama_path = stitch_images(images)
 
-    mask = detect_black_areas(panorama)
-    if mask.sum() > 0:
-        panorama = inpaint_black_areas(panorama, mask)
+            panoramas.append({
+                "room_id": room_id,
+                "status": "ok",
+                "panorama": panorama_path,
+                "image_count": len(images)
+            })
 
-    panorama = make_seamless_horizontal(panorama)
+        except Exception as e:
+            panoramas.append({
+                "room_id": room_id,
+                "status": "error",
+                "error": str(e),
+                "image_count": len(images)
+            })
 
-    return panorama
+    return panoramas
