@@ -1,34 +1,36 @@
+# ai-virtual-tour-engine/services/stitching.py
+from __future__ import annotations
+from typing import List
+import os
 import cv2
-import uuid
+import numpy as np
 
+def _read(path: str) -> np.ndarray:
+    img = cv2.imread(path)
+    if img is None:
+        raise ValueError(f"Could not read image: {path}")
+    return img
 
-def stitch_images(image_paths: list[str]) -> str:
+def stitch_images(image_paths: List[str]) -> np.ndarray:
     """
-    Returns a panorama image file path (/tmp/...jpg)
-
-    IMPORTANT:
-    - Requires >= 2 images (guarded)
-    - Loads cv2 images (numpy arrays) before passing to stitcher
+    OpenCV Stitcher ile panorama dener.
+    - 4+ foto için hedeflenir.
+    - Başarısız olursa exception fırlatır (pipeline fallback'a gider).
     """
-    if len(image_paths) < 2:
-        raise ValueError("Not enough images for OpenCV stitching")
+    paths = [p for p in image_paths if p and os.path.exists(p)]
+    if len(paths) < 2:
+        raise ValueError("Need at least 2 images to stitch")
 
-    images = []
-    for p in image_paths:
-        img = cv2.imread(p)
-        if img is None:
-            raise ValueError(f"Failed to load image: {p}")
-        images.append(img)
+    imgs = [_read(p) for p in paths]
 
-    stitcher = cv2.Stitcher_create()
-    status, pano = stitcher.stitch(images)
+    # OpenCV version compatibility
+    if hasattr(cv2, "Stitcher_create"):
+        stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
+    else:
+        stitcher = cv2.createStitcher(False)
 
-    if status != cv2.Stitcher_OK or pano is None:
-        raise RuntimeError(f"OpenCV stitching failed with status {status}")
+    status, pano = stitcher.stitch(imgs)
+    if status != 0 or pano is None or pano.size == 0:
+        raise RuntimeError(f"OpenCV stitch failed with status={status}")
 
-    output = f"/tmp/pano_{uuid.uuid4().hex}.jpg"
-    ok = cv2.imwrite(output, pano)
-    if not ok:
-        raise RuntimeError("Failed to write panorama output image")
-
-    return output
+    return pano
