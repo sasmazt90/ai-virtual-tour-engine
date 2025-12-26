@@ -1,8 +1,21 @@
+# ai-virtual-tour-engine/services/pipeline.py
+from __future__ import annotations
+
+from typing import Dict, Any, List
+import cv2
+
 from services.stitching import stitch_images
 from services.ai_panorama import generate_ai_panorama
+from services.storage import persist_image_bytes
+
+def _encode_jpg(img) -> bytes:
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+    if not ok:
+        raise RuntimeError("Failed to encode jpg")
+    return buf.tobytes()
 
 
-def build_panorama_pipeline(rooms: dict) -> dict:
+def build_panorama_pipeline(rooms: Dict[str, Any]) -> Dict[str, Any]:
     """
     rooms format:
     {
@@ -11,15 +24,23 @@ def build_panorama_pipeline(rooms: dict) -> dict:
         ...
       ]
     }
+
+    Return:
+    {
+      "room_count": N,
+      "panorama_count": OK_COUNT,
+      "panoramas": [
+        { "room_id": 0, "status": "ok|error", "panorama_url": "/static/..jpg", ... }
+      ]
+    }
     """
-    results = []
+    results: List[Dict[str, Any]] = []
 
     for room in rooms.get("rooms", []):
-        room_id = room.get("room_id", 0)
-        images = room.get("images", [])
+        room_id = int(room.get("room_id", 0))
+        images = room.get("images", []) or []
         count = len(images)
 
-        # ✅ Hard guarantee: hiçbir oda 500'e sebep olmasın
         if count == 0:
             results.append({
                 "room_id": room_id,
@@ -30,14 +51,15 @@ def build_panorama_pipeline(rooms: dict) -> dict:
             })
             continue
 
-        # ✅ 1–3 foto: OpenCV'ye hiç sokma → direkt AI panorama
+        # 1–3: AI (synthetic) route
         if count < 4:
             try:
-                pano = generate_ai_panorama(images)
+                pano_img = generate_ai_panorama(images)
+                url = persist_image_bytes(_encode_jpg(pano_img), prefix="panorama_ai")
                 results.append({
                     "room_id": room_id,
                     "status": "ok",
-                    "panorama": pano,
+                    "panorama_url": url,
                     "image_count": count,
                     "mode": "ai"
                 })
@@ -51,23 +73,25 @@ def build_panorama_pipeline(rooms: dict) -> dict:
                 })
             continue
 
-        # ✅ 4+ foto: önce OpenCV dene, hata olursa AI fallback
+        # 4+: OpenCV then AI fallback
         try:
-            pano = stitch_images(images)
+            pano_img = stitch_images(images)
+            url = persist_image_bytes(_encode_jpg(pano_img), prefix="pano")
             results.append({
                 "room_id": room_id,
                 "status": "ok",
-                "panorama": pano,
+                "panorama_url": url,
                 "image_count": count,
                 "mode": "opencv"
             })
         except Exception:
             try:
-                pano = generate_ai_panorama(images)
+                pano_img = generate_ai_panorama(images[:3])  # stable fallback
+                url = persist_image_bytes(_encode_jpg(pano_img), prefix="panorama_ai_fallback")
                 results.append({
                     "room_id": room_id,
                     "status": "ok",
-                    "panorama": pano,
+                    "panorama_url": url,
                     "image_count": count,
                     "mode": "ai_fallback"
                 })
@@ -82,6 +106,6 @@ def build_panorama_pipeline(rooms: dict) -> dict:
 
     return {
         "room_count": len(results),
-        "panorama_count": len(results),
+        "panorama_count": len([r for r in results if r.get("status") == "ok"]),
         "panoramas": results
     }
