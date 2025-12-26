@@ -3,7 +3,6 @@ from typing import List
 import tempfile
 import os
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 
 from services.grouping import group_images_by_room
 from services.pipeline import build_panorama_pipeline
@@ -16,9 +15,6 @@ app = FastAPI(
 
 MAX_FILES = 50
 
-# 🔧 CPU-bound işler için thread pool
-executor = ThreadPoolExecutor(max_workers=1)
-
 
 @app.get("/")
 def health():
@@ -27,51 +23,37 @@ def health():
 
 @app.post("/panorama")
 async def create_panorama(
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(
+        ...,
+        description="Upload between 1 and 50 images"
+    )
 ):
-    # 🧹 Swagger / multipart bug fix
-    files = [
-        f for f in files
-        if hasattr(f, "filename") and f.filename
-    ]
+    # 🧹 Swagger / multipart bazen boş item ekleyebiliyor → temizle
+    files = [f for f in files if getattr(f, "filename", None)]
 
     if not files:
         raise HTTPException(status_code=400, detail="No valid files uploaded")
 
     if len(files) > MAX_FILES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Maximum {MAX_FILES} images allowed"
-        )
+        raise HTTPException(status_code=400, detail=f"Maximum {MAX_FILES} images allowed")
 
+    # 📁 Temp klasör
     with tempfile.TemporaryDirectory() as tmpdir:
         image_paths = []
 
-        # 📥 Dosyaları kaydet
         for file in files:
-            path = os.path.join(tmpdir, file.filename)
+            # filename None/"" olamaz çünkü üstte filtreledik
+            safe_name = os.path.basename(file.filename)
+            path = os.path.join(tmpdir, safe_name)
+
             await save_image(file, path)
             image_paths.append(path)
 
-        # 🧠 Gruplama (hafif işlem)
+        # 🧠 Oda gruplama (CPU / model)
         rooms = group_images_by_room(image_paths)
 
-        if not rooms:
-            raise HTTPException(
-                status_code=400,
-                detail="No rooms detected from images"
-            )
+        # 🧩 Pipeline (CPU-heavy) → event loop bloklamasın
+        loop = asyncio.get_running_loop()
+        panoramas = await loop.run_in_executor(None, build_panorama_pipeline, rooms)
 
-        # ⚠️ AĞIR İŞLEM → THREADPOOL
-        loop = asyncio.get_event_loop()
-        panoramas = await loop.run_in_executor(
-            executor,
-            build_panorama_pipeline,
-            rooms
-        )
-
-    return {
-        "room_count": len(rooms),
-        "panorama_count": len(panoramas),
-        "panoramas": panoramas
-    }
+    return panoramas
