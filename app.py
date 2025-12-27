@@ -9,11 +9,6 @@ from fastapi.staticfiles import StaticFiles
 
 from services.scene_linker import build_hotspots
 
-
-# -------------------------------------------------
-# APP SETUP
-# -------------------------------------------------
-
 app = FastAPI(title="AI Virtual Tour Engine")
 
 app.add_middleware(
@@ -22,10 +17,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# -------------------------------------------------
-# PATHS
-# -------------------------------------------------
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
@@ -36,92 +27,49 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# -------------------------------------------------
-# UPLOAD ENDPOINT
-# -------------------------------------------------
-
 @app.post("/upload")
 async def upload_images(files: List[UploadFile] = File(...)):
-    saved_files: List[str] = []
+    saved = []
 
     for file in files:
         ext = os.path.splitext(file.filename)[1].lower()
-        filename = f"{uuid.uuid4()}{ext}"
-        dest = os.path.join(UPLOAD_DIR, filename)
+        name = f"{uuid.uuid4()}{ext}"
+        path = os.path.join(UPLOAD_DIR, name)
 
-        with open(dest, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        with open(path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
 
-        # Absolute path is fine on Render where app runs in /app
-        saved_files.append(dest)
+        saved.append(path)
 
-    return {
-        "uploaded": len(saved_files),
-        "files": saved_files
-    }
+    return {"uploaded": len(saved), "files": saved}
 
-# -------------------------------------------------
-# BUILD SCENES (NO PANORAMA / NO ROOM ASSUMPTIONS)
-# -------------------------------------------------
 
 @app.post("/build-scenes")
 def build_scenes(payload: dict = Body(...)):
-    """
-    payload:
-    {
-      "files": ["/app/uploads/xxx.jpg", ...]
-    }
-
-    output:
-    {
-      "scenes": [
-        {
-          "id": "scene_1",
-          "image": "...",
-          "hotspots": [
-            {"id": "...", "x": 50, "y": 55, "target_image": "..."},
-            ...
-          ]
-        },
-        ...
-      ]
-    }
-    """
-
     files = payload.get("files", [])
     if not files:
         return {"scenes": []}
 
     scenes = []
-    SCENE_SIZE = 7  # stable chunking; no room assumptions
+    CHUNK_SIZE = 7
 
-    for i in range(0, len(files), SCENE_SIZE):
-        chunk = files[i:i + SCENE_SIZE]
+    for i in range(0, len(files), CHUNK_SIZE):
+        chunk = files[i:i + CHUNK_SIZE]
         if not chunk:
             continue
 
-        scene_id = f"scene_{len(scenes) + 1}"
-        main_image = chunk[0]
-
-        # Visual-overlap-based links within the chunk
+        main = chunk[0]
         hotspot_map = build_hotspots(chunk)
-        hotspots = hotspot_map.get(main_image, [])
 
         scenes.append({
-            "id": scene_id,
-            "image": main_image,
-            "hotspots": hotspots
+            "id": f"scene_{len(scenes) + 1}",
+            "image": main,
+            "hotspots": hotspot_map.get(main, [])
         })
 
     return {"scenes": scenes}
 
-# -------------------------------------------------
-# HEALTH CHECK
-# -------------------------------------------------
 
 @app.get("/")
 def root():
-    return {
-        "status": "ok",
-        "message": "AI Virtual Tour Engine running"
-    }
+    return {"status": "ok"}
