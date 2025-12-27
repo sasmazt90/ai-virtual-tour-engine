@@ -1,8 +1,11 @@
 import cv2
-import numpy as np
 from typing import List, Dict
 import uuid
 
+
+# -------------------------------------------------
+# IMAGE HELPERS
+# -------------------------------------------------
 
 def _load_gray(path: str):
     img = cv2.imread(path)
@@ -28,52 +31,53 @@ def _similarity(a: str, b: str) -> float:
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     matches = bf.match(d1, d2)
 
-    return len(matches)
+    return float(len(matches))
 
+
+# -------------------------------------------------
+# HOTSPOT BUILDER
+# -------------------------------------------------
 
 def build_hotspots(images: List[str]) -> Dict[str, list]:
     """
+    Builds a simple graph based on visual similarity.
+
     Returns:
     {
       image_path: [
-        { hotspot },
-        ...
+        {
+          "id": "...",
+          "x": 50,
+          "y": 55,
+          "target_image": "..."
+        }
       ]
     }
     """
 
-    graph = {img: [] for img in images}
+    # initialize adjacency list
+    graph: Dict[str, List[str]] = {img: [] for img in images}
 
+    # pairwise similarity
     for i in range(len(images)):
         for j in range(i + 1, len(images)):
             score = _similarity(images[i], images[j])
-            if score > 40:  # deneysel eşik, çalışıyor
+            if score > 40:  # stable empirical threshold
                 graph[images[i]].append(images[j])
                 graph[images[j]].append(images[i])
 
-    hotspots = {}
+    # build hotspot objects
+    hotspots: Dict[str, list] = {}
 
     for src, targets in graph.items():
         spots = []
         for t in targets:
-from services.hotspot_positioner import estimate_hotspot_position
-
-x, y = estimate_hotspot_position(src, t)
-
-from services.hotspot_positioner import find_hotspot_position
-
-x, y = find_hotspot_position(src)
-
-from services.hotspot_locator import detect_transition_point
-
-x, y = detect_transition_point(src)
-
-spots.append({
-    "id": str(uuid.uuid4()),
-    "x": x,
-    "y": y,
-    "target_image": t
-})
+            spots.append({
+                "id": str(uuid.uuid4()),
+                "x": 50,   # placeholder – will be replaced by vision-based positioning
+                "y": 55,
+                "target_image": t
+            })
         hotspots[src] = spots
 
     return hotspots
