@@ -3,93 +3,121 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from typing import Tuple
 
 
-def _find_empty_mask(pano: np.ndarray) -> np.ndarray:
+def _make_hole_mask(img: np.ndarray) -> np.ndarray:
     """
-    Detect empty / black regions in a stitched panorama.
-    These usually come from warping gaps.
+    Detect "empty" / "invalid" areas to fill.
+    Typical stitcher outputs have black borders / warped gaps.
     """
-    gray = cv2.cvtColor(pano, cv2.COLOR_BGR2GRAY)
+    if img is None or img.size == 0:
+        raise ValueError("ai_fill_panorama: empty image")
 
-    # very dark pixels = empty
-    mask = gray < 8
+    # Anything near-black is considered hole
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    mask = (gray < 8).astype(np.uint8) * 255
 
-    # clean noise
-    mask = mask.astype(np.uint8) * 255
-    kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    # Also catch very low-saturation very dark pixels (optional)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    v = hsv[:, :, 2]
+    s = hsv[:, :, 1]
+    mask2 = ((v < 18) & (s < 25)).astype(np.uint8) * 255
+
+    mask = cv2.bitwise_or(mask, mask2)
+
+    # Clean mask a bit
+    k = max(3, (min(img.shape[:2]) // 200) | 1)  # odd kernel
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    mask = cv2.dilate(mask, kernel, iterations=1)
 
     return mask
 
 
-def _simple_edge_fill(pano: np.ndarray, mask: np.ndarray) -> np.ndarray:
+def _edge_crop_to_content(img: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """
-    Deterministic fallback:
-    Extend nearest valid pixels horizontally to fill gaps.
-    This avoids broken output if AI is unavailable.
+    Crop excessive black borders if a big portion is empty.
+    Keeps content region; avoids huge empty margins.
     """
-    filled = pano.copy()
-    h, w = pano.shape[:2]
+    h, w = img.shape[:2]
+    inv = cv2.bitwise_not(mask)
+    coords = cv2.findNonZero(inv)
+    if coords is None:
+        return img
 
-    for y in range(h):
-        row_mask = mask[y]
-        if not row_mask.any():
-            continue
+    x, y, ww, hh = cv2.boundingRect(coords)
 
-        valid_x = np.where(row_mask == 0)[0]
-        if len(valid_x) == 0:
-            continue
+    # Avoid over-cropping: keep at least 70% in each dimension
+    if ww < int(0.70 * w) or hh < int(0.70 * h):
+        return img
 
-        left = valid_x[0]
-        right = valid_x[-1]
+    cropped = img[y:y+hh, x:x+ww]
+    return cropped
 
-        # fill left gap
-        for x in range(0, left):
-            filled[y, x] = filled[y, left]
 
-        # fill right gap
-        for x in range(right + 1, w):
-            filled[y, x] = filled[y, right]
+def _wrap_seam_and_inpaint(img: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """
+    For "360-ish" panoramas: seam at left/right edges.
+    We soften by padding with wrap-around then inpaint.
+    """
+    h, w = img.shape[:2]
+    pad = max(32, min(256, w // 12))
+
+    # Wrap padding
+    left = img[:, :pad].copy()
+    right = img[:, -pad:].copy()
+    padded = np.concatenate([right, img, left], axis=1)
+
+    # Expand mask similarly
+    mleft = mask[:, :pad].copy()
+    mright = mask[:, -pad:].copy()
+    mpadded = np.concatenate([mright, mask, mleft], axis=1)
+
+    # Inpaint on padded image
+    radius = max(3, min(9, min(h, w) // 180))
+    filled = cv2.inpaint(padded, mpadded, radius, cv2.INPAINT_TELEA)
+
+    # Remove padding
+    filled = filled[:, pad:pad+w]
 
     return filled
 
 
-def ai_fill_panorama(pano: np.ndarray) -> np.ndarray:
+def ai_fill_panorama(img: np.ndarray) -> np.ndarray:
     """
-    Fills missing panorama regions using AI (or safe fallback).
-
-    CONTRACT:
-    - Does NOT hallucinate objects
-    - Does NOT assume room type
-    - Only extends visible surfaces logically
+    "AI-like" fill without external models:
+    - Detect empty/black gaps
+    - Crop huge borders if safe
+    - Inpaint holes
+    - Wrap seam left/right to avoid hard edge seam
     """
+    if img is None or img.size == 0:
+        raise ValueError("ai_fill_panorama: empty image")
 
-    mask = _find_empty_mask(pano)
+    img = img.copy()
+    mask = _make_hole_mask(img)
 
-    # If no empty area → nothing to do
-    if mask.sum() == 0:
-        return pano
+    # If mask is tiny, do nothing
+    hole_ratio = float(np.count_nonzero(mask)) / float(mask.size)
+    if hole_ratio < 0.002:
+        return img
 
-    # --- PLACEHOLDER FOR REAL AI MODEL ---
-    # Here is where a real inpainting / diffusion / completion model
-    # would be called using:
-    #   - pano
-    #   - mask
-    #   - instruction: "continue visible surfaces realistically"
-    #
-    # Since we are currently model-free, we use a safe fallback.
+    # Crop huge borders if safe
+    img2 = _edge_crop_to_content(img, mask)
+    if img2.shape != img.shape:
+        img = img2
+        mask = _make_hole_mask(img)
 
-    try:
-        # Attempt OpenCV inpainting (fast, non-hallucinatory)
-        inpainted = cv2.inpaint(
-            pano,
-            mask,
-            inpaintRadius=3,
-            flags=cv2.INPAINT_TELEA
-        )
-        return inpainted
-    except Exception:
-        # Final safety net (never break pipeline)
-        return _simple_edge_fill(pano, mask)
+    # Inpaint holes
+    h, w = img.shape[:2]
+    radius = max(3, min(9, min(h, w) // 180))
+    filled = cv2.inpaint(img, mask, radius, cv2.INPAINT_TELEA)
+
+    # Seam wrap + inpaint again (helps 360 looping feel)
+    mask2 = _make_hole_mask(filled)
+    filled = _wrap_seam_and_inpaint(filled, mask2)
+
+    # Light smoothing to reduce artifacts
+    filled = cv2.GaussianBlur(filled, (0, 0), sigmaX=0.6)
+
+    return filled
