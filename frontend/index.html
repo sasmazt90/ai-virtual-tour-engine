@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Virtual Tour</title>
+  <style>
+    body { margin: 0; background: #000; }
+    #viewer {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #scene {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .hotspot {
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      background: rgba(255,255,255,0.9);
+      border-radius: 50%;
+      cursor: pointer;
+      transform: translate(-50%, -50%);
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(255,255,255,0.6); }
+      70% { box-shadow: 0 0 0 15px rgba(255,255,255,0); }
+      100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+    }
+  </style>
+</head>
+<body>
+
+<div id="viewer">
+  <img id="scene" />
+</div>
+
+<script>
+const scenes = {
+  salon: {
+    image: "https://ai-virtual-tour-engine.onrender.com/static/panorama_3be9fb22-3235-4661-9b7a-d0790faa2b82.jpg",
+    hotspots: [
+      { x: 70, y: 55, target: "mutfak" }
+    ]
+  },
+  mutfak: {
+    image: "https://ai-virtual-tour-engine.onrender.com/static/panorama_MUTFAK.jpg",
+    hotspots: [
+      { x: 30, y: 60, target: "salon" }
+    ]
+  }
+};
+
+const viewer = document.getElementById("viewer");
+const sceneImg = document.getElementById("scene");
+
+function loadScene(name) {
+  viewer.querySelectorAll(".hotspot").forEach(h => h.remove());
+
+  const scene = scenes[name];
+  sceneImg.src = scene.image;
+
+  scene.hotspots.forEach(h => {
+    const el = document.createElement("div");
+    el.className = "hotspot";
+    el.style.left = h.x + "%";
+    el.style.top = h.y + "%";
+    el.onclick = () => loadScene(h.target);
+    viewer.appendChild(el);
+  });
+}
+
+loadScene("salon");
+</script>
+
+</body>
+</html>
