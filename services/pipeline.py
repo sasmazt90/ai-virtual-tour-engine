@@ -11,13 +11,9 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def build_panorama_pipeline(images: List[str]) -> dict:
     """
-    NİHAİ PIPELINE
+    TEK PANORAMA
     - ODA YOK
     - GROUP YOK
-    - TEK PANORAMA
-    Kurallar:
-      < 4 görsel  -> AI panorama
-      >=4 görsel  -> OpenCV stitcher, olmazsa AI fallback
     """
 
     if not images or len(images) < 2:
@@ -26,7 +22,7 @@ def build_panorama_pipeline(images: List[str]) -> dict:
     output_name = f"panorama_{uuid.uuid4()}.jpg"
     output_path = os.path.join(OUTPUT_DIR, output_name)
 
-    # 1) OpenCV (>=4)
+    # 1️⃣ OpenCV stitch (>=4 image)
     if len(images) >= 4:
         try:
             stitched = stitch_images(images, output_path)
@@ -36,15 +32,15 @@ def build_panorama_pipeline(images: List[str]) -> dict:
                     "panorama": f"/static/{output_name}"
                 }
         except Exception:
-            pass  # fallback
+            pass  # AI fallback
 
-    # 2) AI fallback
-    ai_path = generate_ai_panorama(images, output_path)
+    # 2️⃣ AI panorama (1 parametre!)
+    ai_path = generate_ai_panorama(images)
 
     if not ai_path or not os.path.exists(ai_path):
-        raise RuntimeError("Panorama generation failed")
+        raise RuntimeError("AI panorama generation failed")
 
     return {
         "method": "ai_panorama",
-        "panorama": f"/static/{output_name}"
+        "panorama": f"/static/{os.path.basename(ai_path)}"
     }
