@@ -2,41 +2,30 @@ import cv2
 import numpy as np
 
 
-def estimate_hotspot_position(src_img_path: str, tgt_img_path: str):
+def find_hotspot_position(source_img_path: str) -> tuple[int, int]:
     """
-    Returns (x, y) in percentage based on feature flow direction
+    Returns (x_percent, y_percent)
+    Heuristic:
+    - Find strongest vertical edge cluster (door / opening)
+    - Fallback to center-right
     """
 
-    img1 = cv2.imread(src_img_path, cv2.IMREAD_GRAYSCALE)
-    img2 = cv2.imread(tgt_img_path, cv2.IMREAD_GRAYSCALE)
+    img = cv2.imread(source_img_path)
+    if img is None:
+        return 60, 55
 
-    if img1 is None or img2 is None:
-        return 50, 55
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    orb = cv2.ORB_create(800)
-    k1, d1 = orb.detectAndCompute(img1, None)
-    k2, d2 = orb.detectAndCompute(img2, None)
+    edges = cv2.Canny(gray, 80, 160)
+    h, w = edges.shape
 
-    if d1 is None or d2 is None:
-        return 50, 55
+    vertical_sum = edges.sum(axis=0)
+    max_x = int(np.argmax(vertical_sum))
 
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-    matches = bf.match(d1, d2)
+    x_percent = int((max_x / w) * 100)
+    y_percent = 55
 
-    if len(matches) < 10:
-        return 50, 55
+    # Clamp to sane bounds
+    x_percent = max(15, min(85, x_percent))
 
-    deltas = []
-    for m in matches:
-        p1 = k1[m.queryIdx].pt
-        p2 = k2[m.trainIdx].pt
-        deltas.append(p2[0] - p1[0])
-
-    avg_dx = np.mean(deltas)
-
-    if avg_dx > 20:
-        return 70, 55  # right
-    elif avg_dx < -20:
-        return 30, 55  # left
-    else:
-        return 50, 60  # forward-ish
+    return x_percent, y_percent
