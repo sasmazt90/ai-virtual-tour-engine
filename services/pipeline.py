@@ -1,104 +1,50 @@
-from __future__ import annotations
-
-from typing import Dict, Any, List
-import cv2
+import os
+import uuid
+from typing import List
 
 from services.stitching import stitch_images
 from services.ai_panorama import generate_ai_panorama
-from services.ai_fill import ai_fill_panorama
-from services.storage import persist_image_bytes
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(os.path.dirname(BASE_DIR), "outputs")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def _encode_jpg(img) -> bytes:
-    ok, buf = cv2.imencode(
-        ".jpg",
-        img,
-        [int(cv2.IMWRITE_JPEG_QUALITY), 92]
-    )
-    if not ok:
-        raise RuntimeError("Failed to encode jpg")
-    return buf.tobytes()
-
-
-def build_panorama_pipeline(rooms: Dict[str, Any]) -> Dict[str, Any]:
+def build_panorama_pipeline(images: List[str]) -> dict:
     """
-    AI-FIRST panorama pipeline.
-
-    Rules:
-    - <4 images: HARD FAIL
-    - >=4 images:
-        1. AI semantic reconstruction (primary)
-        2. OpenCV stitching (supporting)
-        3. AI fill ALWAYS applied
+    NİHAİ PIPELINE
+    - ODA YOK
+    - GROUP YOK
+    - TEK PANORAMA
+    Kurallar:
+      < 4 görsel  -> AI panorama
+      >=4 görsel  -> OpenCV stitcher, olmazsa AI fallback
     """
 
-    results: List[Dict[str, Any]] = []
+    if not images or len(images) < 2:
+        raise ValueError("At least 2 images are required")
 
-    for room in rooms.get("rooms", []):
-        room_id = int(room.get("room_id", 0))
-        images = room.get("images", []) or []
-        count = len(images)
+    output_name = f"panorama_{uuid.uuid4()}.jpg"
+    output_path = os.path.join(OUTPUT_DIR, output_name)
 
-        if count < 4:
-            results.append({
-                "room_id": room_id,
-                "status": "error",
-                "error": "Not enough images (minimum 4 required)",
-                "image_count": count,
-                "mode": "insufficient_images"
-            })
-            continue
-
+    # 1) OpenCV (>=4)
+    if len(images) >= 4:
         try:
-            # 1️⃣ AI-first panorama (semantic / layout aware)
-            pano = generate_ai_panorama(images)
-
-            # 2️⃣ Always fill missing / weak areas
-            pano = ai_fill_panorama(pano)
-
-            url = persist_image_bytes(
-                _encode_jpg(pano),
-                prefix="panorama_ai"
-            )
-
-            results.append({
-                "room_id": room_id,
-                "status": "ok",
-                "panorama_url": url,
-                "image_count": count,
-                "mode": "ai_primary"
-            })
-
+            stitched = stitch_images(images, output_path)
+            if stitched and os.path.exists(output_path):
+                return {
+                    "method": "opencv_stitcher",
+                    "panorama": f"/static/{output_name}"
+                }
         except Exception:
-            # 3️⃣ OpenCV fallback (LAST RESORT)
-            try:
-                pano = stitch_images(images)
-                pano = ai_fill_panorama(pano)
+            pass  # fallback
 
-                url = persist_image_bytes(
-                    _encode_jpg(pano),
-                    prefix="panorama_opencv_fallback"
-                )
+    # 2) AI fallback
+    ai_path = generate_ai_panorama(images, output_path)
 
-                results.append({
-                    "room_id": room_id,
-                    "status": "ok",
-                    "panorama_url": url,
-                    "image_count": count,
-                    "mode": "opencv_fallback"
-                })
-
-            except Exception as e2:
-                results.append({
-                    "room_id": room_id,
-                    "status": "error",
-                    "error": f"AI and OpenCV failed: {str(e2)}",
-                    "image_count": count,
-                    "mode": "failed"
-                })
+    if not ai_path or not os.path.exists(ai_path):
+        raise RuntimeError("Panorama generation failed")
 
     return {
-        "room_count": len(results),
-        "panorama_count": len([r for r in results if r["status"] == "ok"]),
-        "panoramas": results
+        "method": "ai_panorama",
+        "panorama": f"/static/{output_name}"
     }
