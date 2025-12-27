@@ -60,6 +60,10 @@ from services.hotspot_positioner import estimate_hotspot_position
 
 x, y = estimate_hotspot_position(src, t)
 
+from services.hotspot_positioner import find_hotspot_position
+
+x, y = find_hotspot_position(src)
+
 spots.append({
     "id": str(uuid.uuid4()),
     "x": x,
