@@ -1,71 +1,134 @@
-from fastapi import FastAPI, UploadFile, File, Form
-from typing import List
 import os
 import uuid
+from typing import List, Optional
+
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from services.pipeline import build_panorama_pipeline
 
-app = FastAPI(title="AI Virtual Tour Engine")
+# =========================================================
+# BASE CONFIG
+# =========================================================
 
-BASE_DIR = os.path.dirname(os.path.abspath(_file_))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# =========================================================
+# FASTAPI INIT
+# =========================================================
+
+app = FastAPI(
+    title="AI Virtual Tour Engine",
+    description="360° panorama & virtual tour generation service",
+    version="1.0.0"
+)
+
+app.mount("/static", StaticFiles(directory=OUTPUT_DIR), name="static")
+
+# =========================================================
+# MODELS
+# =========================================================
+
+class RoomImages(BaseModel):
+    room_id: int
+    images: List[str]
+
+
+class PanoramaRequest(BaseModel):
+    rooms: List[RoomImages]
+
+
+# =========================================================
+# HEALTHCHECK
+# =========================================================
 
 @app.get("/health")
-def health():
+def healthcheck():
     return {"status": "ok"}
 
 
-@app.post("/build-panorama-upload")
-async def build_panorama_upload(
-    files: List[UploadFile] = File(
-        ..., description="Birden fazla görsel seçilebilir (multi-select aktif)"
-    ),
-    room_id: int = Form(0),
-):
-    """
-    Swagger UI üzerinden MULTIPLE image upload destekler.
-    Seçilen tüm görseller server'a kaydedilir ve pipeline'a path olarak gönderilir.
-    """
+# =========================================================
+# UPLOAD ENDPOINT
+# =========================================================
 
-    image_paths: List[str] = []
+@app.post("/upload")
+async def upload_images(files: List[UploadFile] = File(...)):
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    saved_files = []
 
     for file in files:
-        ext = os.path.splitext(file.filename or "")[1].lower()
-        if ext == "":
-            ext = ".jpg"
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type: {file.filename}"
+            )
 
-        filename = f"{uuid.uuid4().hex}{ext}"
-        save_path = os.path.join(UPLOAD_DIR, filename)
+        filename = f"{uuid.uuid4()}{ext}"
+        file_path = os.path.join(UPLOAD_DIR, filename)
 
-        content = await file.read()
-        with open(save_path, "wb") as f:
-            f.write(content)
+        with open(file_path, "wb") as f:
+            f.write(await file.read())
 
-        image_paths.append(save_path)
+        saved_files.append(file_path)
 
-    payload = {
-        "rooms": [
-            {
-                "room_id": room_id,
-                "images": image_paths,
-            }
-        ]
+    return {
+        "uploaded": len(saved_files),
+        "files": saved_files
     }
 
-    return build_panorama_pipeline(payload)
 
+# =========================================================
+# PANORAMA PIPELINE
+# =========================================================
 
 @app.post("/build-panorama")
-def build_panorama(payload: dict):
+def build_panorama(data: PanoramaRequest):
     """
-    JSON tabanlı endpoint (dosya upload yok).
-    Örnek payload:
+    Expects:
     {
       "rooms": [
-        { "room_id": 0, "images": ["/app/uploads/a.jpg", "/app/uploads/b.jpg"] }
+        {
+          "room_id": 0,
+          "images": ["uploads/a.jpg", "uploads/b.jpg"]
+        }
       ]
     }
     """
-    return build_panorama_pipeline(payload)
+
+    if not data.rooms:
+        raise HTTPException(status_code=400, detail="No rooms provided")
+
+    try:
+        result = build_panorama_pipeline(
+            {
+                "rooms": [room.dict() for room in data.rooms]
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return JSONResponse(content=result)
+
+
+# =========================================================
+# ROOT
+# =========================================================
+
+@app.get("/")
+def root():
+    return {
+        "service": "AI Virtual Tour Engine",
+        "docs": "/docs",
+        "health": "/health"
+    }
