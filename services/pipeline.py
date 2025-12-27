@@ -5,7 +5,6 @@ from typing import Dict, Any, List
 import cv2
 
 from services.stitching import stitch_images
-from services.ai_panorama import generate_ai_panorama
 from services.ai_fill import ai_fill_panorama
 from services.storage import persist_image_bytes
 
@@ -23,13 +22,13 @@ def _encode_jpg(img) -> bytes:
 
 def build_panorama_pipeline(rooms: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Strict panorama pipeline (Option B).
+    OPTION B – REAL PANORAMA ONLY (NO FAKE AI PANORAMA)
 
     Rules:
-    - <4 images: HARD FAIL
-    - 4–5 images: OpenCV only (no AI panorama, but AI fill allowed)
-    - >=6 images: OpenCV primary, AI panorama fallback allowed
-    - After ANY OpenCV success → ai_fill_panorama is ALWAYS applied
+    - <4 images  → HARD FAIL
+    - >=4 images → OpenCV panorama ONLY
+    - After OpenCV success → ai_fill_panorama is ALWAYS applied
+    - If OpenCV fails → ERROR (never AI collage)
     """
 
     results: List[Dict[str, Any]] = []
@@ -60,51 +59,29 @@ def build_panorama_pipeline(rooms: Dict[str, Any]) -> Dict[str, Any]:
                 "room_id": room_id,
                 "status": "error",
                 "error": "Not enough images for panorama (minimum 4 required)",
+                "hint": (
+                    "Take photos from ONE fixed spot, rotating in place. "
+                    "6–12 images recommended for clean 360 panorama."
+                ),
                 "image_count": count,
                 "mode": "insufficient_images"
             })
             continue
 
         # -------------------------
-        # 4–5 images → OpenCV ONLY
-        # -------------------------
-        if 4 <= count <= 5:
-            try:
-                pano = stitch_images(images)
-                pano = ai_fill_panorama(pano)
-
-                url = persist_image_bytes(
-                    _encode_jpg(pano),
-                    prefix="pano"
-                )
-                results.append({
-                    "room_id": room_id,
-                    "status": "ok",
-                    "panorama_url": url,
-                    "image_count": count,
-                    "mode": "opencv"
-                })
-            except Exception as e:
-                results.append({
-                    "room_id": room_id,
-                    "status": "error",
-                    "error": f"OpenCV panorama failed (no AI fallback allowed): {str(e)}",
-                    "image_count": count,
-                    "mode": "opencv"
-                })
-            continue
-
-        # -------------------------
-        # >=6 images → OpenCV + AI panorama fallback
+        # OpenCV panorama (ONLY PATH)
         # -------------------------
         try:
             pano = stitch_images(images)
+
+            # AI fill is allowed ONLY on REAL panoramas
             pano = ai_fill_panorama(pano)
 
             url = persist_image_bytes(
                 _encode_jpg(pano),
                 prefix="pano"
             )
+
             results.append({
                 "room_id": room_id,
                 "status": "ok",
@@ -112,34 +89,24 @@ def build_panorama_pipeline(rooms: Dict[str, Any]) -> Dict[str, Any]:
                 "image_count": count,
                 "mode": "opencv"
             })
-        except Exception:
-            try:
-                # AI panorama fallback (last resort)
-                pano = generate_ai_panorama(images[:4])
-                pano = ai_fill_panorama(pano)
 
-                url = persist_image_bytes(
-                    _encode_jpg(pano),
-                    prefix="panorama_ai_fallback"
-                )
-                results.append({
-                    "room_id": room_id,
-                    "status": "ok",
-                    "panorama_url": url,
-                    "image_count": count,
-                    "mode": "ai_fallback"
-                })
-            except Exception as e2:
-                results.append({
-                    "room_id": room_id,
-                    "status": "error",
-                    "error": f"OpenCV failed; AI fallback failed: {str(e2)}",
-                    "image_count": count,
-                    "mode": "ai_fallback"
-                })
+        except Exception as e:
+            results.append({
+                "room_id": room_id,
+                "status": "error",
+                "error": f"OpenCV panorama failed: {str(e)}",
+                "hint": (
+                    "Photos likely include parallax (camera moved). "
+                    "For true 360 panorama, stand still and rotate camera."
+                ),
+                "image_count": count,
+                "mode": "opencv_failed"
+            })
 
     return {
         "room_count": len(results),
-        "panorama_count": len([r for r in results if r.get("status") == "ok"]),
+        "panorama_count": len(
+            [r for r in results if r.get("status") == "ok"]
+        ),
         "panoramas": results
     }
