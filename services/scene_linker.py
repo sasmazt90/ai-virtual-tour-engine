@@ -64,6 +64,10 @@ from services.hotspot_positioner import find_hotspot_position
 
 x, y = find_hotspot_position(src)
 
+from services.hotspot_locator import detect_transition_point
+
+x, y = detect_transition_point(src)
+
 spots.append({
     "id": str(uuid.uuid4()),
     "x": x,
