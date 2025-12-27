@@ -6,6 +6,7 @@ import cv2
 
 from services.stitching import stitch_images
 from services.ai_panorama import generate_ai_panorama
+from services.ai_fill import ai_fill_panorama
 from services.storage import persist_image_bytes
 
 
@@ -22,12 +23,13 @@ def _encode_jpg(img) -> bytes:
 
 def build_panorama_pipeline(rooms: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Strict panorama pipeline.
+    Strict panorama pipeline (Option B).
 
     Rules:
-    - <4 images: HARD FAIL (no AI fake panoramas)
-    - 4–5 images: OpenCV only, no AI fallback
-    - >=6 images: OpenCV primary, AI fallback only if OpenCV crashes
+    - <4 images: HARD FAIL
+    - 4–5 images: OpenCV only (no AI panorama, but AI fill allowed)
+    - >=6 images: OpenCV primary, AI panorama fallback allowed
+    - After ANY OpenCV success → ai_fill_panorama is ALWAYS applied
     """
 
     results: List[Dict[str, Any]] = []
@@ -68,9 +70,11 @@ def build_panorama_pipeline(rooms: Dict[str, Any]) -> Dict[str, Any]:
         # -------------------------
         if 4 <= count <= 5:
             try:
-                pano_img = stitch_images(images)
+                pano = stitch_images(images)
+                pano = ai_fill_panorama(pano)
+
                 url = persist_image_bytes(
-                    _encode_jpg(pano_img),
+                    _encode_jpg(pano),
                     prefix="pano"
                 )
                 results.append({
@@ -91,12 +95,14 @@ def build_panorama_pipeline(rooms: Dict[str, Any]) -> Dict[str, Any]:
             continue
 
         # -------------------------
-        # >=6 images → OpenCV + AI fallback (last resort)
+        # >=6 images → OpenCV + AI panorama fallback
         # -------------------------
         try:
-            pano_img = stitch_images(images)
+            pano = stitch_images(images)
+            pano = ai_fill_panorama(pano)
+
             url = persist_image_bytes(
-                _encode_jpg(pano_img),
+                _encode_jpg(pano),
                 prefix="pano"
             )
             results.append({
@@ -107,11 +113,13 @@ def build_panorama_pipeline(rooms: Dict[str, Any]) -> Dict[str, Any]:
                 "mode": "opencv"
             })
         except Exception:
-            # AI fallback is allowed ONLY here
             try:
-                pano_img = generate_ai_panorama(images[:4])
+                # AI panorama fallback (last resort)
+                pano = generate_ai_panorama(images[:4])
+                pano = ai_fill_panorama(pano)
+
                 url = persist_image_bytes(
-                    _encode_jpg(pano_img),
+                    _encode_jpg(pano),
                     prefix="panorama_ai_fallback"
                 )
                 results.append({
