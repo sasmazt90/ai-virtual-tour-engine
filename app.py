@@ -7,6 +7,8 @@ from fastapi import FastAPI, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from services.scene_linker import build_hotspots
+
 # -------------------------------------------------
 # APP SETUP
 # -------------------------------------------------
@@ -39,7 +41,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.post("/upload")
 async def upload_images(files: List[UploadFile] = File(...)):
-    saved_files = []
+    saved_files: List[str] = []
 
     for file in files:
         ext = os.path.splitext(file.filename)[1].lower()
@@ -49,6 +51,7 @@ async def upload_images(files: List[UploadFile] = File(...)):
         with open(dest, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
+        # We store absolute paths because backend runs in /app on Render.
         saved_files.append(dest)
 
     return {
@@ -57,7 +60,7 @@ async def upload_images(files: List[UploadFile] = File(...)):
     }
 
 # -------------------------------------------------
-# BUILD SCENES (NO ROOM / NO PANORAMA)
+# BUILD SCENES (NO PANORAMA / NO ROOM ASSUMPTIONS)
 # -------------------------------------------------
 
 @app.post("/build-scenes")
@@ -74,8 +77,12 @@ def build_scenes(payload: dict = Body(...)):
         {
           "id": "scene_1",
           "image": "...",
-          "hotspots": [...]
-        }
+          "hotspots": [
+            {"id": "...", "x": 50, "y": 55, "target_image": "..."},
+            ...
+          ]
+        },
+        ...
       ]
     }
     """
@@ -85,7 +92,7 @@ def build_scenes(payload: dict = Body(...)):
         return {"scenes": []}
 
     scenes = []
-    SCENE_SIZE = 7  # geçici, deterministik, stabil
+    SCENE_SIZE = 7  # stable chunking; no room assumptions
 
     for i in range(0, len(files), SCENE_SIZE):
         chunk = files[i:i + SCENE_SIZE]
@@ -95,14 +102,9 @@ def build_scenes(payload: dict = Body(...)):
         scene_id = f"scene_{len(scenes) + 1}"
         main_image = chunk[0]
 
-        hotspots = []
-        for target in chunk[1:]:
-            hotspots.append({
-                "id": str(uuid.uuid4()),
-                "x": 50,
-                "y": 55,
-                "target_image": target
-            })
+        # Build hotspots based on visual overlap within this chunk
+        hotspot_map = build_hotspots(chunk)
+        hotspots = hotspot_map.get(main_image, [])
 
         scenes.append({
             "id": scene_id,
