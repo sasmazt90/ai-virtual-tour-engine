@@ -7,12 +7,9 @@ from fastapi import FastAPI, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from services.grouping import group_images_by_room
-from services.scenes import build_scenes_from_groups
-
-# -------------------------------------------------------------------
+# -------------------------------------------------
 # APP SETUP
-# -------------------------------------------------------------------
+# -------------------------------------------------
 
 app = FastAPI(title="AI Virtual Tour Engine")
 
@@ -23,9 +20,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------------------------------------------------------------------
+# -------------------------------------------------
 # PATHS
-# -------------------------------------------------------------------
+# -------------------------------------------------
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
@@ -36,9 +33,9 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# -------------------------------------------------------------------
+# -------------------------------------------------
 # UPLOAD ENDPOINT
-# -------------------------------------------------------------------
+# -------------------------------------------------
 
 @app.post("/upload")
 async def upload_images(files: List[UploadFile] = File(...)):
@@ -59,9 +56,9 @@ async def upload_images(files: List[UploadFile] = File(...)):
         "files": saved_files
     }
 
-# -------------------------------------------------------------------
-# BUILD SCENES (PHOTO → GROUP → SCENE)
-# -------------------------------------------------------------------
+# -------------------------------------------------
+# BUILD SCENES (NO ROOM / NO PANORAMA)
+# -------------------------------------------------
 
 @app.post("/build-scenes")
 def build_scenes(payload: dict = Body(...)):
@@ -70,20 +67,54 @@ def build_scenes(payload: dict = Body(...)):
     {
       "files": ["/app/uploads/xxx.jpg", ...]
     }
+
+    output:
+    {
+      "scenes": [
+        {
+          "id": "scene_1",
+          "image": "...",
+          "hotspots": [...]
+        }
+      ]
+    }
     """
 
     files = payload.get("files", [])
     if not files:
         return {"scenes": []}
 
-    groups = group_images_by_room(files)
-    scenes = build_scenes_from_groups(groups)
+    scenes = []
+    SCENE_SIZE = 7  # geçici, deterministik, stabil
 
-    return scenes
+    for i in range(0, len(files), SCENE_SIZE):
+        chunk = files[i:i + SCENE_SIZE]
+        if not chunk:
+            continue
 
-# -------------------------------------------------------------------
+        scene_id = f"scene_{len(scenes) + 1}"
+        main_image = chunk[0]
+
+        hotspots = []
+        for target in chunk[1:]:
+            hotspots.append({
+                "id": str(uuid.uuid4()),
+                "x": 50,
+                "y": 55,
+                "target_image": target
+            })
+
+        scenes.append({
+            "id": scene_id,
+            "image": main_image,
+            "hotspots": hotspots
+        })
+
+    return {"scenes": scenes}
+
+# -------------------------------------------------
 # HEALTH CHECK
-# -------------------------------------------------------------------
+# -------------------------------------------------
 
 @app.get("/")
 def root():
