@@ -1,60 +1,32 @@
-# ai-virtual-tour-engine/app.py
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from _future_ import annotations
+from fastapi import FastAPI, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from typing import List
-import tempfile
 import os
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+import uuid
 
-from services.grouping import group_images_by_room
 from services.pipeline import build_panorama_pipeline
-from services.storage import save_upload_file, ensure_output_dir
+from services.semantic_scene import build_rooms_from_semantics
 
-app = FastAPI(title="AI Virtual Tour Engine", version="1.0.1")
+app = FastAPI()
 
-MAX_FILES = 50
+BASE_DIR = os.path.dirname(_file_)
+OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Thread pool: OpenCV + image IO CPU heavy
-_executor = ThreadPoolExecutor(max_workers=1)
-
-# Static output (public URLs)
-OUTPUT_DIR = ensure_output_dir()
 app.mount("/static", StaticFiles(directory=OUTPUT_DIR), name="static")
 
-
-@app.get("/")
-def health():
-    return {"status": "ok"}
-
-
 @app.post("/panorama")
-async def create_panorama(
-    files: List[UploadFile] = File(..., description="Upload between 1 and 50 images"),
-):
-    # Swagger bazen boş/garip entry ekliyor -> temizle
-    files = [f for f in files if getattr(f, "filename", None)]
+async def create_panorama(files: List[UploadFile] = File(...)):
+    img_paths = []
+    batch_id = uuid.uuid4().hex
 
-    if not files:
-        raise HTTPException(status_code=400, detail="No valid files uploaded")
+    for f in files:
+        path = os.path.join(OUTPUT_DIR, f"{batch_id}_{f.filename}")
+        with open(path, "wb") as out:
+            out.write(await f.read())
+        img_paths.append(path)
 
-    if len(files) > MAX_FILES:
-        raise HTTPException(status_code=400, detail=f"Maximum {MAX_FILES} images allowed")
-
-    # Temp input directory
-    with tempfile.TemporaryDirectory() as tmpdir:
-        image_paths: List[str] = []
-
-        for f in files:
-            dst = os.path.join(tmpdir, f.filename)
-            await save_upload_file(f, dst)
-            image_paths.append(dst)
-
-        # Room-agnostic clustering (no labels, no fixed room count)
-        rooms = group_images_by_room(image_paths)
-
-        # Pipeline blocking -> thread
-        loop = asyncio.get_running_loop()
-        panoramas = await loop.run_in_executor(_executor, build_panorama_pipeline, rooms)
-
-    return panoramas
+    rooms = build_rooms_from_semantics(img_paths)
+    result = build_panorama_pipeline(rooms)
+    return result
