@@ -1,81 +1,149 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Virtual Tour</title>
+  <title>Virtual Tour Viewer</title>
   <style>
-    body { margin: 0; background: #000; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #000;
+      height: 100%;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
+    }
+
     #viewer {
       position: relative;
-      width: 100vw;
-      height: 100vh;
-      overflow: hidden;
-    }
-    #scene {
       width: 100%;
       height: 100%;
-      object-fit: cover;
+      background: #000;
     }
+
+    #scene-image {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
     .hotspot {
       position: absolute;
       width: 18px;
       height: 18px;
-      background: rgba(255,255,255,0.9);
+      background: rgba(0, 160, 255, 0.9);
       border-radius: 50%;
       cursor: pointer;
       transform: translate(-50%, -50%);
-      animation: pulse 1.5s infinite;
+      box-shadow: 0 0 10px rgba(0,160,255,0.9);
     }
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(255,255,255,0.6); }
-      70% { box-shadow: 0 0 0 15px rgba(255,255,255,0); }
-      100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+
+    .hotspot:hover {
+      background: rgba(255, 200, 0, 1);
+    }
+
+    #scene-label {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: #fff;
+      background: rgba(0,0,0,0.6);
+      padding: 6px 10px;
+      font-size: 14px;
+      border-radius: 4px;
     }
   </style>
 </head>
 <body>
 
 <div id="viewer">
-  <img id="scene" />
+  <div id="scene-label"></div>
+  <img id="scene-image" />
 </div>
 
 <script>
-const scenes = {
-  salon: {
-    image: "https://ai-virtual-tour-engine.onrender.com/static/panorama_3be9fb22-3235-4661-9b7a-d0790faa2b82.jpg",
-    hotspots: [
-      { x: 70, y: 55, target: "mutfak" }
-    ]
-  },
-  mutfak: {
-    image: "https://ai-virtual-tour-engine.onrender.com/static/panorama_MUTFAK.jpg",
-    hotspots: [
-      { x: 30, y: 60, target: "salon" }
-    ]
-  }
+/* ============================
+   1) BACKEND'DEN GELEN JSON
+   ============================ */
+
+const TOUR_DATA = {
+  "scenes": [
+    {
+      "id": "scene_1",
+      "image": "/app/uploads/9bd0b85e-6001-4eac-8373-44c5bcfb380d.png",
+      "hotspots": [
+        {
+          "id": "h1",
+          "x": 50,
+          "y": 55,
+          "target_image": "/app/uploads/1b080306-f0e1-4853-b050-24548eb3c0b4.png"
+        }
+      ]
+    }
+  ]
 };
 
+/* ============================
+   2) STATE
+   ============================ */
+
+let currentScene = null;
 const viewer = document.getElementById("viewer");
-const sceneImg = document.getElementById("scene");
+const imgEl = document.getElementById("scene-image");
+const labelEl = document.getElementById("scene-label");
 
-function loadScene(name) {
-  viewer.querySelectorAll(".hotspot").forEach(h => h.remove());
+/* ============================
+   3) SCENE BULUCU
+   ============================ */
 
-  const scene = scenes[name];
-  sceneImg.src = scene.image;
+function findSceneByImage(imagePath) {
+  return TOUR_DATA.scenes.find(s => s.image === imagePath);
+}
 
+/* ============================
+   4) SCENE RENDER
+   ============================ */
+
+function renderScene(scene) {
+  currentScene = scene;
+
+  // label
+  labelEl.innerText = scene.id;
+
+  // image
+  imgEl.src = scene.image;
+
+  // eski hotspotları sil
+  document.querySelectorAll(".hotspot").forEach(h => h.remove());
+
+  // hotspotları çiz
   scene.hotspots.forEach(h => {
-    const el = document.createElement("div");
-    el.className = "hotspot";
-    el.style.left = h.x + "%";
-    el.style.top = h.y + "%";
-    el.onclick = () => loadScene(h.target);
-    viewer.appendChild(el);
+    const dot = document.createElement("div");
+    dot.className = "hotspot";
+
+    dot.style.left = h.x + "%";
+    dot.style.top  = h.y + "%";
+
+    dot.onclick = () => {
+      const targetScene = findSceneByImage(h.target_image);
+      if (targetScene) {
+        renderScene(targetScene);
+      } else {
+        // hedef image scene değilse direkt göster
+        imgEl.src = h.target_image;
+      }
+    };
+
+    viewer.appendChild(dot);
   });
 }
 
-loadScene("salon");
-</script>
+/* ============================
+   5) BAŞLAT
+   ============================ */
 
+renderScene(TOUR_DATA.scenes[0]);
+
+</script>
 </body>
 </html>
