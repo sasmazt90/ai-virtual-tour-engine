@@ -56,12 +56,16 @@ def build_hotspots(images: List[str]) -> Dict[str, list]:
     for src, targets in graph.items():
         spots = []
         for t in targets:
-            spots.append({
-                "id": str(uuid.uuid4()),
-                "x": 50,
-                "y": 55,
-                "target_image": t
-            })
+from services.hotspot_positioner import estimate_hotspot_position
+
+x, y = estimate_hotspot_position(src, t)
+
+spots.append({
+    "id": str(uuid.uuid4()),
+    "x": x,
+    "y": y,
+    "target_image": t
+})
         hotspots[src] = spots
 
     return hotspots
