@@ -6,6 +6,7 @@ services:
     rootDir: apps/web
     buildCommand: npm install --include=dev --legacy-peer-deps && npm run build
     startCommand: npm start
+    healthCheckPath: /api/healthz
     envVars:
       - key: NODE_VERSION
         value: 20
