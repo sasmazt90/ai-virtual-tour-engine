@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "scripts": {
+    "web:dev": "npm --prefix apps/web run dev",
+    "web:build": "npm --prefix apps/web run build",
+    "web:start": "npm --prefix apps/web run start",
+    "web:typecheck": "npm --prefix apps/web run typecheck"
+  }
+}

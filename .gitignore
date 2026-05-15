@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+node_modules/
+build/
+.react-router/
+.vitest/
+storage/
+
+.env
+.env.*
+!.env.example

@@ -1,0 +1,49 @@
+services:
+  - type: web
+    name: 360-estate-suite
+    runtime: node
+    plan: free
+    rootDir: apps/web
+    buildCommand: npm install --legacy-peer-deps && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_CREATE_ENV
+        value: PRODUCTION
+      - key: DATABASE_SSL
+        value: "true"
+      - key: SUPABASE_STORAGE_BUCKET
+        value: uploads
+      - key: CORS_ORIGINS
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: AUTH_URL
+        sync: false
+      - key: AUTH_SECRET
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPEN_AI_API_KEY
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_KEY
+        sync: false
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: PDF_SERVICE_URL
+        sync: false
