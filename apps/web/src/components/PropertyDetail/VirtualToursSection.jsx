@@ -4,6 +4,7 @@ import Fake360Viewer from "@/components/Fake360Viewer";
 import Splat3DViewer from "@/components/Splat3DViewer";
 import { CreateVirtualTourModal } from "./CreateVirtualTourModal";
 import { CreateSplatTourModal } from "./CreateSplatTourModal";
+import { CreateVideo3DTourModal } from "./CreateVideo3DTourModal";
 import { ModalShell } from "./ModalShell";
 import { titleCase } from "@/utils/formatters";
 
@@ -11,6 +12,7 @@ export function VirtualToursSection({ property, propertyId }) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [splatOpen, setSplatOpen] = useState(false);
+  const [video3DOpen, setVideo3DOpen] = useState(false);
   const [viewTourId, setViewTourId] = useState(null);
 
   const userId = property?.user_id || null;
@@ -123,10 +125,17 @@ export function VirtualToursSection({ property, propertyId }) {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setSplatOpen(true)}
+            onClick={() => setVideo3DOpen(true)}
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 font-jetbrains-mono"
           >
-            + 3D Scan
+            + iPhone Video
+          </button>
+          <button
+            type="button"
+            onClick={() => setSplatOpen(true)}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-500/70 text-amber-600 dark:text-amber-300 text-sm font-medium hover:bg-amber-50 dark:hover:bg-amber-500/10 font-jetbrains-mono"
+          >
+            + 3D File
           </button>
           <button
             type="button"
@@ -202,6 +211,13 @@ export function VirtualToursSection({ property, propertyId }) {
       <CreateSplatTourModal
         open={splatOpen}
         onClose={() => setSplatOpen(false)}
+        propertyId={propertyId}
+        userId={userId}
+      />
+
+      <CreateVideo3DTourModal
+        open={video3DOpen}
+        onClose={() => setVideo3DOpen(false)}
         propertyId={propertyId}
         userId={userId}
       />

@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { getDbUserIdFromSession } from "@/app/api/utils/dbUser";
 
 const HEARTBEAT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const VIDEO_3D_HEARTBEAT_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 async function refundCreditsIfNeeded({ userId, jobId }) {
   const jobs = await sql(
@@ -60,7 +61,12 @@ async function failIfTimedOut({ userId, jobRow }) {
   const lastMs = new Date(last).getTime();
   if (!Number.isFinite(lastMs)) return false;
 
-  if (Date.now() - lastMs <= HEARTBEAT_TIMEOUT_MS) {
+  const timeoutMs =
+    jobRow.job_type === "video_3d_tour"
+      ? VIDEO_3D_HEARTBEAT_TIMEOUT_MS
+      : HEARTBEAT_TIMEOUT_MS;
+
+  if (Date.now() - lastMs <= timeoutMs) {
     return false;
   }
 
@@ -69,7 +75,7 @@ async function failIfTimedOut({ userId, jobRow }) {
   await sql(
     "UPDATE ai_jobs SET job_status = 'failed', error_message = $1 WHERE id = $2 AND user_id = $3 AND job_status = 'running'",
     [
-      `Timed out: no heartbeat for more than ${Math.round(HEARTBEAT_TIMEOUT_MS / 60000)} minutes`,
+      `Timed out: no heartbeat for more than ${Math.round(timeoutMs / 60000)} minutes`,
       jobRow.id,
       userId,
     ],
@@ -92,7 +98,7 @@ export async function GET(request, { params }) {
     const jobId = params.jobId;
 
     const rows = await sql(
-      "SELECT id, job_status, progress, result_payload, error_message, started_at, last_heartbeat_at, updated_at FROM ai_jobs WHERE id = $1 AND user_id = $2 LIMIT 1",
+      "SELECT id, job_type, job_status, progress, result_payload, error_message, started_at, last_heartbeat_at, updated_at FROM ai_jobs WHERE id = $1 AND user_id = $2 LIMIT 1",
       [jobId, userId],
     );
 
@@ -107,7 +113,7 @@ export async function GET(request, { params }) {
     const fresh = timedOut
       ? (
           await sql(
-            "SELECT id, job_status, progress, result_payload, error_message, started_at, last_heartbeat_at FROM ai_jobs WHERE id = $1 AND user_id = $2 LIMIT 1",
+            "SELECT id, job_type, job_status, progress, result_payload, error_message, started_at, last_heartbeat_at FROM ai_jobs WHERE id = $1 AND user_id = $2 LIMIT 1",
             [jobId, userId],
           )
         )?.[0] || j
