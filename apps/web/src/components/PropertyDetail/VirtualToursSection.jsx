@@ -1,13 +1,16 @@
 import { useCallback, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import Fake360Viewer from "@/components/Fake360Viewer";
+import Splat3DViewer from "@/components/Splat3DViewer";
 import { CreateVirtualTourModal } from "./CreateVirtualTourModal";
+import { CreateSplatTourModal } from "./CreateSplatTourModal";
 import { ModalShell } from "./ModalShell";
 import { titleCase } from "@/utils/formatters";
 
 export function VirtualToursSection({ property, propertyId }) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
+  const [splatOpen, setSplatOpen] = useState(false);
   const [viewTourId, setViewTourId] = useState(null);
 
   const userId = property?.user_id || null;
@@ -55,7 +58,9 @@ export function VirtualToursSection({ property, propertyId }) {
     for (const t of tours) {
       if (!t?.id) continue;
 
-      if (t?.source_type === "staging") {
+      if (t?.tour_type === "splat3d") {
+        map[t.id] = "3D Virtual Tour - Original Scan";
+      } else if (t?.source_type === "staging") {
         const st =
           typeof t?.staging_type === "string" ? t.staging_type.trim() : "";
         map[t.id] = `Virtual Tour – ${titleCase(st || "Staging")}`;
@@ -115,13 +120,22 @@ export function VirtualToursSection({ property, propertyId }) {
           Virtual Tour
         </h3>
 
-        <button
-          type="button"
-          onClick={() => setCreateOpen(true)}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800 font-jetbrains-mono"
-        >
-          + Add New
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setSplatOpen(true)}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 font-jetbrains-mono"
+          >
+            + 3D Scan
+          </button>
+          <button
+            type="button"
+            onClick={() => setCreateOpen(true)}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800 font-jetbrains-mono"
+          >
+            + Fake-360
+          </button>
+        </div>
       </div>
 
       {tours.length > 0 ? (
@@ -185,12 +199,24 @@ export function VirtualToursSection({ property, propertyId }) {
         tours={property?.tours || []}
       />
 
+      <CreateSplatTourModal
+        open={splatOpen}
+        onClose={() => setSplatOpen(false)}
+        propertyId={propertyId}
+        userId={userId}
+      />
+
       {viewTourId && viewingTour?.tour_payload ? (
         <ModalShell
           title={displayTitleById[viewingTour.id] || "Virtual Tour"}
           onClose={() => setViewTourId(null)}
         >
-          <Fake360Viewer tourPayload={viewingTour.tour_payload} height={480} />
+          {viewingTour?.tour_type === "splat3d" ||
+          viewingTour?.tour_payload?.type === "splat3d" ? (
+            <Splat3DViewer tourPayload={viewingTour.tour_payload} height={560} />
+          ) : (
+            <Fake360Viewer tourPayload={viewingTour.tour_payload} height={480} />
+          )}
         </ModalShell>
       ) : null}
     </div>

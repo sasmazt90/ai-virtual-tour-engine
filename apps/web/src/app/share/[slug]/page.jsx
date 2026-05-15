@@ -648,9 +648,12 @@ export default function SharePage(props) {
                 const stagingType =
                   typeof t?.staging_type === "string" ? t.staging_type : "";
 
-                const label = isStaging
-                  ? `${titleCase(stagingType || "Staging")} Virtual Tour`
-                  : "Original Virtual Tour";
+                const label =
+                  t?.tour_type === "splat3d"
+                    ? "3D Virtual Tour"
+                    : isStaging
+                      ? `${titleCase(stagingType || "Staging")} Virtual Tour`
+                      : "Original Virtual Tour";
 
                 const payload =
                   t?.tour_payload && typeof t.tour_payload === "object"

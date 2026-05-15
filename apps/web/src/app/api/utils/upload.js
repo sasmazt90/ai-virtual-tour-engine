@@ -13,9 +13,31 @@ const MIME_EXTENSIONS = {
   "image/webp": "webp",
   "image/gif": "gif",
   "application/pdf": "pdf",
+  "model/vnd.ply": "ply",
+  "application/octet-stream": "bin",
 };
 
-function extensionFromMime(mimeType) {
+const SAFE_FILENAME_EXTENSIONS = new Set([
+  "jpg",
+  "jpeg",
+  "png",
+  "webp",
+  "gif",
+  "pdf",
+  "ply",
+  "splat",
+  "ksplat",
+]);
+
+function extensionFromFilename(filename) {
+  const raw = String(filename || "");
+  const ext = raw.split(".").pop()?.toLowerCase().trim();
+  return ext && SAFE_FILENAME_EXTENSIONS.has(ext) ? ext : "";
+}
+
+function extensionFromMime(mimeType, filename) {
+  const filenameExt = extensionFromFilename(filename);
+  if (filenameExt) return filenameExt;
   return MIME_EXTENSIONS[String(mimeType || "").toLowerCase()] || "bin";
 }
 
@@ -78,26 +100,26 @@ async function downloadRemoteUrl(url) {
   };
 }
 
-async function persistLocalUpload({ data, mimeType }) {
+async function persistLocalUpload({ data, mimeType, filename }) {
   await mkdir(STORAGE_DIR, { recursive: true });
 
-  const ext = extensionFromMime(mimeType);
-  const filename = `${crypto.randomUUID()}.${ext}`;
-  const absolutePath = path.join(STORAGE_DIR, filename);
+  const ext = extensionFromMime(mimeType, filename);
+  const storedFilename = `${crypto.randomUUID()}.${ext}`;
+  const absolutePath = path.join(STORAGE_DIR, storedFilename);
 
   await writeFile(absolutePath, data);
 
   return {
-    url: `${PUBLIC_UPLOAD_BASE}/${filename}`,
+    url: `${PUBLIC_UPLOAD_BASE}/${storedFilename}`,
     mimeType: mimeType || null,
   };
 }
 
-async function persistSupabaseUpload({ data, mimeType }) {
+async function persistSupabaseUpload({ data, mimeType, filename }) {
   const config = getSupabaseStorageConfig();
   if (!config) return null;
 
-  const ext = extensionFromMime(mimeType);
+  const ext = extensionFromMime(mimeType, filename);
   const objectPath = `${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.${ext}`;
 
   const { error } = await config.client.storage
@@ -121,18 +143,23 @@ async function persistSupabaseUpload({ data, mimeType }) {
   };
 }
 
-async function persistUpload({ data, mimeType }) {
-  const supabaseUpload = await persistSupabaseUpload({ data, mimeType });
+async function persistUpload({ data, mimeType, filename }) {
+  const supabaseUpload = await persistSupabaseUpload({
+    data,
+    mimeType,
+    filename,
+  });
   if (supabaseUpload) return supabaseUpload;
 
-  return persistLocalUpload({ data, mimeType });
+  return persistLocalUpload({ data, mimeType, filename });
 }
 
-async function upload({ url, buffer, base64, mimeType }) {
+async function upload({ url, buffer, base64, mimeType, filename }) {
   if (buffer) {
     return persistUpload({
       data: Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer),
       mimeType: mimeType || "application/octet-stream",
+      filename,
     });
   }
 
@@ -141,6 +168,7 @@ async function upload({ url, buffer, base64, mimeType }) {
     return persistUpload({
       data: parsed.buffer,
       mimeType: parsed.mimeType,
+      filename,
     });
   }
 
@@ -149,6 +177,7 @@ async function upload({ url, buffer, base64, mimeType }) {
     return persistUpload({
       data: remote.buffer,
       mimeType: remote.mimeType,
+      filename: filename || new URL(url).pathname,
     });
   }
 

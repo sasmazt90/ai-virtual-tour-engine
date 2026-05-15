@@ -21,6 +21,7 @@ export async function POST(request) {
       const result = await upload({
         buffer: Buffer.from(await file.arrayBuffer()),
         mimeType: file.type || "application/octet-stream",
+        filename: file.name || "",
       });
 
       return Response.json({
