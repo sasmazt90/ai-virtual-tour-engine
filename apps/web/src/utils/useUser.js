@@ -6,7 +6,7 @@ const useUser = () => {
 
   const fetchUser = React.useCallback(async () => {
     const res = await fetch("/api/auth/session", {
-      credentials: "same-origin",
+      credentials: "include",
       cache: "no-store",
     });
     if (!res.ok) return null;
@@ -17,7 +17,15 @@ const useUser = () => {
   const refetchUser = React.useCallback(async () => {
     setLoading(true);
     try {
-      setUser(await fetchUser());
+      let nextUser = null;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        nextUser = await fetchUser();
+        if (nextUser) break;
+        if (attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 350));
+        }
+      }
+      setUser(nextUser);
     } catch {
       setUser(null);
     } finally {
