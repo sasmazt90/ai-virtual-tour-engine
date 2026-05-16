@@ -183,7 +183,7 @@ export async function POST(request) {
     let geoLat = null;
     let geoLng = null;
     let formattedAddress = null;
-    let nearbyPlaces = null;
+    let nearbyPlaces = {};
 
     try {
       const geo = await geocodeAddress({
@@ -300,7 +300,7 @@ export async function POST(request) {
         ${geoLat},
         ${geoLng},
         ${formattedAddress},
-        ${toJsonbParam(nearbyPlaces)}::jsonb
+        ${toJsonbParam(nearbyPlaces) || "{}"}::jsonb
       )
       RETURNING *
     `;

@@ -1,7 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import { createClient } from "@supabase/supabase-js";
 
 const STORAGE_DIR = path.resolve(process.cwd(), "storage", "uploads");
 const PUBLIC_UPLOAD_BASE = "/uploads";
@@ -55,13 +54,9 @@ function getSupabaseStorageConfig() {
   if (!url || !serviceRoleKey) return null;
 
   return {
+    url: url.replace(/\/+$/, ""),
     bucket,
-    client: createClient(url, serviceRoleKey, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    }),
+    serviceRoleKey,
   };
 }
 
@@ -128,23 +123,36 @@ async function persistSupabaseUpload({ data, mimeType, filename }) {
   const ext = extensionFromMime(mimeType, filename);
   const objectPath = `${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.${ext}`;
 
-  const { error } = await config.client.storage
-    .from(config.bucket)
-    .upload(objectPath, data, {
-      contentType: mimeType || "application/octet-stream",
-      upsert: false,
-    });
+  const uploadUrl = `${config.url}/storage/v1/object/${encodeURIComponent(config.bucket)}/${objectPath
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")}`;
 
-  if (error) {
-    throw new Error(`Supabase upload failed: ${error.message}`);
+  const response = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      apikey: config.serviceRoleKey,
+      Authorization: `Bearer ${config.serviceRoleKey}`,
+      "Content-Type": mimeType || "application/octet-stream",
+      "x-upsert": "false",
+    },
+    body: data,
+  });
+
+  if (!response.ok) {
+    const bodyText = await response.text().catch(() => "");
+    throw new Error(
+      `Supabase upload failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ""}`,
+    );
   }
 
-  const { data: publicUrl } = config.client.storage
-    .from(config.bucket)
-    .getPublicUrl(objectPath);
+  const publicObjectPath = objectPath
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/");
 
   return {
-    url: publicUrl.publicUrl,
+    url: `${config.url}/storage/v1/object/public/${encodeURIComponent(config.bucket)}/${publicObjectPath}`,
     mimeType: mimeType || null,
   };
 }
