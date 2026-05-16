@@ -58,5 +58,6 @@ set -a
 source "$ENV_FILE"
 set +a
 
+export QT_QPA_PLATFORM=offscreen
 export OPEN_SPLAT_BIN="$OPEN_SPLAT_DIR/build/opensplat"
 python3 "$REPO_DIR/apps/video-worker/worker.py"

@@ -26,7 +26,7 @@ SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "2000"))
 def run(cmd, cwd=None):
     print("$", " ".join(str(c) for c in cmd), flush=True)
     env = os.environ.copy()
-    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    env["QT_QPA_PLATFORM"] = "offscreen"
     subprocess.run(cmd, cwd=cwd, env=env, check=True)
 
 
