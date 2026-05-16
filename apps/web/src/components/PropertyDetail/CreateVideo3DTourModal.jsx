@@ -88,18 +88,27 @@ function estimateRemainingMs({ status, progress, startedAt, createdAt }) {
 
 function stageFor({ status, progress, uploadLoading }) {
   if (uploadLoading) return "Uploading video";
-  if (!status) return "Starting 3D tour job";
-  if (status === "queued") return "Queued for GPU worker";
+  if (!status) return "Starting";
+  if (status === "queued") return "Queued";
   if (status === "failed") return "Failed";
-  if (status === "succeeded") return "Completed";
+  if (status === "succeeded") return "Ready";
 
   const p = Number(progress || 0);
-  if (p < 15) return "Downloading video";
-  if (p < 35) return "Extracting frames";
-  if (p < 70) return "Reconstructing camera poses";
-  if (p < 88) return "Training Gaussian Splat";
-  if (p < 95) return "Uploading 3D tour";
-  return "Saving tour";
+  if (p < 15) return "Preparing video";
+  if (p < 35) return "Reading video";
+  if (p < 70) return "Building 3D structure";
+  if (p < 88) return "Creating 3D tour";
+  if (p < 95) return "Uploading tour";
+  return "Finishing";
+}
+
+function statusDescription({ status, uploadLoading }) {
+  if (uploadLoading) return "Your video is uploading.";
+  if (!status) return "Preparing your video.";
+  if (status === "queued") return "Your video is waiting to be processed.";
+  if (status === "failed") return "The 3D tour could not be created.";
+  if (status === "succeeded") return "Your 3D tour is ready.";
+  return "Processing is in progress.";
 }
 
 export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
@@ -120,7 +129,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
       const res = await fetch(`/api/ai/jobs/${jobId}`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error || "Could not fetch job");
+        throw new Error(body?.error || "Could not fetch progress.");
       }
       return res.json();
     },
@@ -206,12 +215,12 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error || "Could not start 3D tour job.");
+        throw new Error(body?.error || "Could not start the 3D tour.");
       }
 
       const body = await res.json();
       if (!body?.jobId) {
-        throw new Error("Server did not return a job ID.");
+        throw new Error("Could not start the 3D tour.");
       }
 
       setJobId(body.jobId);
@@ -220,7 +229,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
       console.error(err);
       setStatus("error");
       setError(
-        err instanceof Error ? err.message : "Could not start 3D tour job.",
+        err instanceof Error ? err.message : "Could not start the 3D tour.",
       );
     }
   }, [file, propertyId]);
@@ -247,29 +256,30 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
     dateMs(jobData?.startedAt) || dateMs(jobData?.createdAt)
       ? Date.now() - (dateMs(jobData?.startedAt) || dateMs(jobData?.createdAt))
       : 0;
-  const lastHeartbeatMs = dateMs(jobData?.lastHeartbeatAt);
-  const heartbeatAgeMs = lastHeartbeatMs ? Date.now() - lastHeartbeatMs : null;
   const remainingLabel =
     jobStatus === "succeeded"
       ? "done"
       : jobStatus === "failed"
         ? "stopped"
         : formatDuration(remainingMs);
+  const queuedForMs =
+    jobStatus === "queued" && jobData?.createdAt
+      ? Date.now() - (dateMs(jobData.createdAt) || Date.now())
+      : 0;
 
   return (
-    <ModalShell title="Create 3D Tour from iPhone Video" onClose={safeOnClose}>
+    <ModalShell title="Create 3D Tour" onClose={safeOnClose}>
       <div className="space-y-4">
         <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#171717] p-4">
           <div className="flex items-start gap-3">
             <Video className="mt-0.5 h-5 w-5 text-amber-500" />
             <div>
               <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 font-jetbrains-mono">
-                Video to 3D Gaussian Splat
+                Create from iPhone video
               </div>
               <p className="mt-1 text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
-                Upload a 2-3 minute walkthrough video. The worker extracts
-                frames, reconstructs camera poses, trains a Gaussian Splat and
-                saves the result as the property virtual tour.
+                Upload a short walkthrough video. We will turn it into an
+                interactive 3D tour for this property.
               </p>
             </div>
           </div>
@@ -290,7 +300,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
             <div className="mt-2 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
               {file.name} - {(file.size / 1024 / 1024).toFixed(1)} MB -{" "}
               {format || "unknown"}
-              {" "}• Limit {formatFileSize(MAX_VIDEO_BYTES)}
+              {" "}- Limit {formatFileSize(MAX_VIDEO_BYTES)}
             </div>
           ) : null}
         </div>
@@ -310,8 +320,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
                   <span>{activeStage}</span>
                 </div>
                 <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
-                  {jobId ? `Job ${String(jobId).slice(0, 8)}...` : "Preparing job"}
-                  {jobStatus ? ` • ${jobStatus}` : null}
+                  {statusDescription({ status: jobStatus, uploadLoading })}
                 </div>
               </div>
               <div className="shrink-0 text-right text-sm font-semibold text-gray-900 dark:text-gray-100 font-jetbrains-mono">
@@ -326,18 +335,12 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
               />
             </div>
 
-            <div className="mt-3 grid gap-2 text-xs text-gray-600 dark:text-gray-300 font-jetbrains-mono sm:grid-cols-3">
+            <div className="mt-3 grid gap-2 text-xs text-gray-600 dark:text-gray-300 font-jetbrains-mono sm:grid-cols-2">
               <div className="flex items-center gap-2">
                 <Clock3 className="h-3.5 w-3.5 text-amber-500" />
                 <span>Remaining: {remainingLabel}</span>
               </div>
               <div>Elapsed: {formatDuration(elapsedMs)}</div>
-              <div>
-                Heartbeat:{" "}
-                {heartbeatAgeMs == null
-                  ? "waiting"
-                  : `${formatDuration(heartbeatAgeMs)} ago`}
-              </div>
             </div>
 
             {jobData?.error ? (
@@ -345,10 +348,10 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
                 {jobData.error}
               </div>
             ) : null}
-            {!done ? (
+            {!done && queuedForMs > 2 * 60 * 1000 ? (
               <div className="mt-2 text-xs text-gray-500 dark:text-gray-500 font-jetbrains-mono">
-                Keep the GPU worker running in RunPod. This panel updates every
-                few seconds while the job is moving.
+                This is taking longer than usual to start. Progress will update
+                automatically.
               </div>
             ) : null}
           </div>
