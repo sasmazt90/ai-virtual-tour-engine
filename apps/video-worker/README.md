@@ -37,11 +37,20 @@ This worker needs real compute. For good results use a GPU machine. CPU mode may
 Use a pay-as-you-go NVIDIA GPU pod only while a video is being processed, then stop it.
 For the first production test, pick an RTX 4090/A10/L4 class machine with 16GB+ VRAM.
 
-1. Build or start a container that has this worker, `ffmpeg`, `colmap`, and OpenSplat installed.
-2. Set the environment variables above.
-3. Upload an iPhone walkthrough video from the web app with `+ iPhone Video`.
-4. Start the worker. It will pick the queued `video_3d_tour` job from Supabase.
-5. Stop the GPU pod when the job status becomes `succeeded` or `failed`.
+The Dockerfile builds OpenSplat into the worker image. On RunPod, choose a GPU pod with
+Docker enabled and a persistent volume mounted at `/workspace`.
+
+1. Upload an iPhone walkthrough video from the web app with `+ iPhone Video`.
+2. Create `/workspace/runpod.env` from `runpod.env.example` and fill the real values.
+3. Start the worker:
+
+```bash
+apt-get update && apt-get install -y git
+bash <(curl -fsSL https://raw.githubusercontent.com/sasmazt90/ai-virtual-tour-engine/main/apps/video-worker/scripts/runpod-build-and-run.sh)
+```
+
+4. Watch the logs until the job status becomes `succeeded` or `failed`.
+5. Stop the GPU pod after processing. This is what keeps the cost low.
 
 OpenSplat expects a COLMAP-style project folder. The worker extracts frames into `images/`,
 creates `sparse/0` with COLMAP, then runs:
