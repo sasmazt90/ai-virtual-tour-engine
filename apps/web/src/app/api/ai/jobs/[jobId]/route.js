@@ -98,7 +98,7 @@ export async function GET(request, { params }) {
     const jobId = params.jobId;
 
     const rows = await sql(
-      "SELECT id, job_type, job_status, progress, result_payload, error_message, started_at, last_heartbeat_at, updated_at FROM ai_jobs WHERE id = $1 AND user_id = $2 LIMIT 1",
+      "SELECT id, job_type, job_status, progress, result_payload, error_message, started_at, last_heartbeat_at, created_at, updated_at FROM ai_jobs WHERE id = $1 AND user_id = $2 LIMIT 1",
       [jobId, userId],
     );
 
@@ -113,7 +113,7 @@ export async function GET(request, { params }) {
     const fresh = timedOut
       ? (
           await sql(
-            "SELECT id, job_type, job_status, progress, result_payload, error_message, started_at, last_heartbeat_at FROM ai_jobs WHERE id = $1 AND user_id = $2 LIMIT 1",
+            "SELECT id, job_type, job_status, progress, result_payload, error_message, started_at, last_heartbeat_at, created_at, updated_at FROM ai_jobs WHERE id = $1 AND user_id = $2 LIMIT 1",
             [jobId, userId],
           )
         )?.[0] || j
@@ -125,8 +125,10 @@ export async function GET(request, { params }) {
       progress: fresh.progress || 0,
       result: fresh.result_payload || null,
       error: fresh.error_message || null,
+      createdAt: fresh.created_at || null,
       startedAt: fresh.started_at || null,
       lastHeartbeatAt: fresh.last_heartbeat_at || null,
+      updatedAt: fresh.updated_at || null,
     });
   } catch (error) {
     console.error("GET /api/ai/jobs/[jobId] error:", error);

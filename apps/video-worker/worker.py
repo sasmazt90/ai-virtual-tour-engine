@@ -29,7 +29,11 @@ def run(cmd, cwd=None):
 
 
 def db():
-    return psycopg.connect(DATABASE_URL, autocommit=True)
+    # Supabase pooler/transaction pooling can drop server-side prepared
+    # statements between statements, which surfaces as:
+    # "prepared statement _pg3_0 does not exist". Disable psycopg's automatic
+    # prepared statements for the long-running worker connection.
+    return psycopg.connect(DATABASE_URL, autocommit=True, prepare_threshold=None)
 
 
 def update_job(conn, job_id, status=None, progress=None, error=None, result=None):
