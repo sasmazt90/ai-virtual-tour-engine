@@ -113,12 +113,18 @@ if (process.env.CORS_ORIGINS) {
 for (const method of ['post', 'put', 'patch'] as const) {
   app[method](
     '*',
-    bodyLimit({
-      maxSize: 4.5 * 1024 * 1024, // 4.5mb to match vercel limit
-      onError: (c) => {
-        return c.json({ error: 'Body size limit exceeded' }, 413);
-      },
-    })
+    async (c, next) => {
+      if (c.req.path === '/api/upload/large') {
+        return next();
+      }
+
+      return bodyLimit({
+        maxSize: 4.5 * 1024 * 1024, // keep small API payloads protected
+        onError: (ctx) => {
+          return ctx.json({ error: 'Body size limit exceeded' }, 413);
+        },
+      })(c, next);
+    }
   );
 }
 

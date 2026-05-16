@@ -1,11 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Clock3, Loader2, Video, XCircle } from "lucide-react";
-import { useUpload } from "@/utils/useUpload";
 import { ModalShell } from "./ModalShell";
 
 const SUPPORTED_EXTENSIONS = new Set(["mp4", "mov", "m4v"]);
 const DEFAULT_TOTAL_MS = 90 * 60 * 1000;
+const MAX_VIDEO_BYTES = 750 * 1024 * 1024;
 
 function extensionFromName(name) {
   return String(name || "").split(".").pop()?.toLowerCase().trim() || "";
@@ -18,6 +18,52 @@ function formatDuration(ms) {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   return rest ? `${hours}h ${rest}m` : `${hours}h`;
+}
+
+function formatFileSize(bytes) {
+  const n = Number(bytes || 0);
+  if (!Number.isFinite(n) || n <= 0) return "0 MB";
+  if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function uploadLargeVideo(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload/large");
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.setRequestHeader("X-Filename", encodeURIComponent(file.name || "iphone-video"));
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      onProgress(Math.round((event.loaded / event.total) * 100));
+    };
+
+    xhr.onload = () => {
+      let body = {};
+      try {
+        body = JSON.parse(xhr.responseText || "{}");
+      } catch {
+        body = {};
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300 && body?.url) {
+        resolve(body);
+        return;
+      }
+
+      reject(
+        new Error(
+          body?.error ||
+            `Video upload failed: [${xhr.status}] ${xhr.statusText}`,
+        ),
+      );
+    };
+
+    xhr.onerror = () => reject(new Error("Video upload failed."));
+    xhr.onabort = () => reject(new Error("Video upload was cancelled."));
+    xhr.send(file);
+  });
 }
 
 function dateMs(value) {
@@ -58,14 +104,15 @@ function stageFor({ status, progress, uploadLoading }) {
 
 export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
   const queryClient = useQueryClient();
-  const [upload, { loading: uploadLoading }] = useUpload();
   const [file, setFile] = useState(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
   const [jobId, setJobId] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const format = useMemo(() => extensionFromName(file?.name), [file?.name]);
-  const disableActions = uploadLoading || status === "starting";
+  const uploadLoading = status === "uploading";
+  const disableActions = status === "uploading" || status === "starting";
 
   const { data: jobData } = useQuery({
     queryKey: ["video-3d-tour-job", jobId],
@@ -126,15 +173,26 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
       return;
     }
 
-    setStatus("starting");
+    if (file.size > MAX_VIDEO_BYTES) {
+      setStatus("error");
+      setError(
+        `Video is too large (${formatFileSize(file.size)}). Please upload a file under ${formatFileSize(MAX_VIDEO_BYTES)}.`,
+      );
+      return;
+    }
+
+    setStatus("uploading");
+    setUploadProgress(0);
     setError("");
     setJobId(null);
 
     try {
-      const uploaded = await upload({ file });
+      const uploaded = await uploadLargeVideo(file, setUploadProgress);
       if (uploaded?.error || !uploaded?.url) {
         throw new Error(uploaded?.error || "Video upload failed.");
       }
+
+      setStatus("starting");
 
       const res = await fetch("/api/ai/video-3d-tour/create", {
         method: "POST",
@@ -165,7 +223,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
         err instanceof Error ? err.message : "Could not start 3D tour job.",
       );
     }
-  }, [file, propertyId, upload]);
+  }, [file, propertyId]);
 
   if (!open) return null;
 
@@ -174,7 +232,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
   const progress = Number.isFinite(rawProgress) ? rawProgress : 0;
   const done = jobStatus === "succeeded" || jobStatus === "failed";
   const visibleProgress = uploadLoading
-    ? 3
+    ? Math.max(1, Math.min(99, uploadProgress))
     : status === "starting"
       ? 5
       : Math.max(0, Math.min(100, progress));
@@ -232,6 +290,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
             <div className="mt-2 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
               {file.name} - {(file.size / 1024 / 1024).toFixed(1)} MB -{" "}
               {format || "unknown"}
+              {" "}• Limit {formatFileSize(MAX_VIDEO_BYTES)}
             </div>
           ) : null}
         </div>
