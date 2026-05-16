@@ -20,6 +20,7 @@ OPEN_SPLAT_BIN = os.getenv("OPEN_SPLAT_BIN", "opensplat")
 WORKER_POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "10"))
 FRAME_RATE = float(os.getenv("FRAME_RATE", "2"))
 MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1600"))
+SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "2000"))
 
 
 def run(cmd, cwd=None):
@@ -108,13 +109,13 @@ def download_video(url, out_path):
                     f.write(chunk)
 
 
-def extract_frames(video_path, frames_dir):
-    frames_dir.mkdir(parents=True, exist_ok=True)
+def extract_frames(video_path, images_dir):
+    images_dir.mkdir(parents=True, exist_ok=True)
     vf = f"fps={FRAME_RATE},scale='min({MAX_IMAGE_SIZE},iw)':-2"
-    run(["ffmpeg", "-y", "-i", str(video_path), "-vf", vf, str(frames_dir / "frame_%06d.jpg")])
+    run(["ffmpeg", "-y", "-i", str(video_path), "-vf", vf, str(images_dir / "frame_%06d.jpg")])
 
 
-def run_colmap(frames_dir, work_dir):
+def run_colmap(images_dir, work_dir):
     db_path = work_dir / "colmap.db"
     sparse_dir = work_dir / "sparse"
     sparse_dir.mkdir(parents=True, exist_ok=True)
@@ -125,7 +126,7 @@ def run_colmap(frames_dir, work_dir):
         "--database_path",
         str(db_path),
         "--image_path",
-        str(frames_dir),
+        str(images_dir),
         "--ImageReader.single_camera",
         "1",
     ])
@@ -136,7 +137,7 @@ def run_colmap(frames_dir, work_dir):
         "--database_path",
         str(db_path),
         "--image_path",
-        str(frames_dir),
+        str(images_dir),
         "--output_path",
         str(sparse_dir),
     ])
@@ -147,17 +148,14 @@ def run_colmap(frames_dir, work_dir):
     return model_dir
 
 
-def run_opensplat(model_dir, frames_dir, output_path):
-    # OpenSplat CLI flags vary a little by build. These flags match the common
-    # COLMAP input flow; override OPEN_SPLAT_BIN with your built binary.
+def run_opensplat(project_dir, output_path):
     run([
         OPEN_SPLAT_BIN,
-        "--input",
-        str(model_dir),
-        "--images",
-        str(frames_dir),
-        "--output",
+        str(project_dir),
+        "-o",
         str(output_path),
+        "-n",
+        str(SPLAT_ITERATIONS),
     ])
     if not output_path.exists():
         raise RuntimeError("OpenSplat did not produce an output file.")
@@ -232,20 +230,20 @@ def process_job(conn, job):
     with tempfile.TemporaryDirectory(prefix="video-3d-tour-") as tmp:
         work_dir = Path(tmp)
         video_path = work_dir / "input_video"
-        frames_dir = work_dir / "frames"
+        images_dir = work_dir / "images"
         output_path = work_dir / "tour.ply"
 
         update_job(conn, job["id"], progress=5)
         download_video(video_url, video_path)
 
         update_job(conn, job["id"], progress=15)
-        extract_frames(video_path, frames_dir)
+        extract_frames(video_path, images_dir)
 
         update_job(conn, job["id"], progress=35)
-        model_dir = run_colmap(frames_dir, work_dir)
+        run_colmap(images_dir, work_dir)
 
         update_job(conn, job["id"], progress=70)
-        run_opensplat(model_dir, frames_dir, output_path)
+        run_opensplat(work_dir, output_path)
 
         update_job(conn, job["id"], progress=88)
         file_url = upload_result(output_path)
