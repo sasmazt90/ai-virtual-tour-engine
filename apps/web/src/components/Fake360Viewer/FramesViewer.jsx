@@ -141,8 +141,8 @@ export function FramesViewer({
   }
 
   const hintText = isPointsMode
-    ? "Drag to look • Scroll/pinch to zoom • Double click to move"
-    : "Drag to look • Scroll/pinch to zoom";
+    ? "Drag to look - scroll or pinch to zoom - double click to move"
+    : "Drag to look - scroll or pinch to zoom";
 
   const panoNode = isPanoMode ? (
     <div
