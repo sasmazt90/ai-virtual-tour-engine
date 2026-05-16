@@ -42,11 +42,18 @@ Docker enabled and a persistent volume mounted at `/workspace`.
 
 1. Upload an iPhone walkthrough video from the web app with `+ iPhone Video`.
 2. Create `/workspace/runpod.env` from `runpod.env.example` and fill the real values.
-3. Start the worker:
+3. If Docker is available on the pod, start the worker:
 
 ```bash
 apt-get update && apt-get install -y git
 bash <(curl -fsSL https://raw.githubusercontent.com/sasmazt90/ai-virtual-tour-engine/main/apps/video-worker/scripts/runpod-build-and-run.sh)
+```
+
+If the template does not include Docker, run it directly in the GPU pod:
+
+```bash
+apt-get update && apt-get install -y curl
+bash <(curl -fsSL https://raw.githubusercontent.com/sasmazt90/ai-virtual-tour-engine/main/apps/video-worker/scripts/runpod-native-run.sh)
 ```
 
 4. Watch the logs until the job status becomes `succeeded` or `failed`.
