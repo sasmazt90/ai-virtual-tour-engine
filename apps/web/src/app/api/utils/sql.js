@@ -18,6 +18,12 @@ function missingDatabaseUrl() {
   );
 }
 
+function normalizeValues(values) {
+  if (values.length === 0) return [];
+  if (values.length === 1 && Array.isArray(values[0])) return values[0];
+  return values;
+}
+
 function buildQuery(stringsOrText, values = []) {
   if (Array.isArray(stringsOrText) && "raw" in stringsOrText) {
     let text = "";
@@ -47,12 +53,13 @@ async function runQuery(client, stringsOrText, values) {
 }
 
 function createTxQuery() {
-  return (stringsOrText, values) => buildQuery(stringsOrText, values);
+  return (stringsOrText, ...values) =>
+    buildQuery(stringsOrText, normalizeValues(values));
 }
 
-async function sql(stringsOrText, values) {
+async function sql(stringsOrText, ...values) {
   if (!pool) missingDatabaseUrl();
-  return runQuery(pool, stringsOrText, values);
+  return runQuery(pool, stringsOrText, normalizeValues(values));
 }
 
 sql.transaction = async (callbackOrQueries) => {
