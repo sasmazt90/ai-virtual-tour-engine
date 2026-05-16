@@ -1,62 +1,20 @@
-import { useState } from "react";
-
 export default function SignUpPage() {
-  const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [fullName, setFullName] = useState("");
-
-  const onSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-
-    if (!email || !password) {
-      setError("Please fill in all fields");
-      setLoading(false);
-      return;
-    }
-
-    try {
-      if (typeof window === "undefined") {
-        throw new Error("Sign-up is only available in the browser");
-      }
-
-      // Dynamically import auth client to avoid crashing the page on load
-      const authReact = await import("@auth/create/react");
-      const signIn = authReact?.signIn;
-      if (typeof signIn !== "function") {
-        throw new Error("Auth client failed to load");
-      }
-
-      const callbackFromQuery = new URLSearchParams(window.location.search).get(
-        "callbackUrl",
-      );
-
-      await signIn("credentials-signup", {
-        email,
-        password,
-        name: fullName,
-        callbackUrl: callbackFromQuery || "/properties",
-        redirect: true,
-      });
-    } catch (err) {
-      console.error("Sign-up error", err);
-      setError(
-        "Sign up page failed to load correctly. Please refresh, or try again in a moment.",
-      );
-      setLoading(false);
-    }
-  };
+  const search =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search)
+      : new URLSearchParams();
+  const callbackUrl = search.get("callbackUrl") || "/properties";
+  const error = search.get("error");
 
   return (
     <div className="flex min-h-screen w-full items-center justify-center bg-gray-50 dark:bg-[#1E1E1E] p-4">
       <form
         noValidate
-        onSubmit={onSubmit}
+        method="post"
+        action="/api/auth/callback/credentials-signup"
         className="w-full max-w-md rounded-2xl bg-white dark:bg-[#262626] p-8 shadow-xl dark:shadow-none dark:ring-1 dark:ring-gray-700"
       >
+        <input type="hidden" name="callbackUrl" value={callbackUrl} />
         <h1 className="mb-8 text-center text-3xl font-bold text-gray-900 dark:text-gray-100 font-jetbrains-mono">
           Create Account
         </h1>
@@ -68,10 +26,8 @@ export default function SignUpPage() {
             </label>
             <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-4 py-3 focus-within:border-[var(--brand)] focus-within:ring-1 focus-within:ring-[var(--brand)]">
               <input
-                name="fullName"
+                name="name"
                 type="text"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
                 placeholder="Enter your full name"
                 className="w-full bg-transparent text-lg outline-none text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 font-jetbrains-mono"
               />
@@ -86,8 +42,6 @@ export default function SignUpPage() {
                 required
                 name="email"
                 type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
                 placeholder="Enter your email"
                 className="w-full bg-transparent text-lg outline-none text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 font-jetbrains-mono"
               />
@@ -102,8 +56,6 @@ export default function SignUpPage() {
                 required
                 name="password"
                 type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
                 className="w-full rounded-lg bg-transparent text-lg outline-none text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 font-jetbrains-mono"
                 placeholder="Create a password"
               />
@@ -112,16 +64,15 @@ export default function SignUpPage() {
 
           {error && (
             <div className="rounded-lg bg-red-50 dark:bg-red-900/30 p-3 text-sm text-red-600 dark:text-red-400 font-jetbrains-mono">
-              {error}
+              Could not create an account with these details.
             </div>
           )}
 
           <button
             type="submit"
-            disabled={loading}
             className="w-full rounded-lg bg-gray-900 dark:bg-gray-100 px-4 py-3 text-base font-medium text-white dark:text-gray-900 transition-colors hover:bg-gray-800 dark:hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-[var(--brand)] focus:ring-offset-2 disabled:opacity-50 font-jetbrains-mono"
           >
-            {loading ? "Creating account..." : "Sign Up"}
+            Sign Up
           </button>
           <p className="text-center text-sm text-gray-600 dark:text-gray-400 font-jetbrains-mono">
             Already have an account?{" "}
