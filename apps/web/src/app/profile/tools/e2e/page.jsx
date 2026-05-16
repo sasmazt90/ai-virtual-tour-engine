@@ -5,10 +5,7 @@ import useUser from "@/utils/useUser";
 import { Header } from "@/components/Header";
 import { StatusBanner } from "@/components/StatusBanner";
 import { useCredits } from "@/hooks/useCredits";
-import {
-  AI_FAKE360_CREDIT_COST,
-  calculateStagingCreditCost,
-} from "@/app/api/utils/pricing";
+import { calculateStagingCreditCost } from "@/app/api/utils/pricing";
 import useUpload from "@/utils/useUpload";
 import { PropertySelector } from "@/components/E2ETests/PropertySelector";
 import { PropertyStats } from "@/components/E2ETests/PropertyStats";
@@ -60,8 +57,7 @@ export default function AIE2ETestsPage() {
   const estimatedTotalCost = useMemo(() => {
     const baseStaging = Number(stagingCostPerPhoto || 0) * 2;
     const modernWithFurniture = Number(stagingCostPerPhotoWithCustomFurniture);
-    const tour = Number(AI_FAKE360_CREDIT_COST || 0);
-    return baseStaging + modernWithFurniture + tour;
+    return baseStaging + modernWithFurniture;
   }, [stagingCostPerPhoto, stagingCostPerPhotoWithCustomFurniture]);
 
   const { e2eRunning, e2eError, results, runE2E } = useE2ETests({
@@ -142,8 +138,8 @@ export default function AIE2ETestsPage() {
               AI E2E Tests
             </h1>
             <p className="mt-2 text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
-              This page runs the same staging + virtual tour flows you run in
-              the UI, but in a guided, repeatable sequence.
+              This page runs the same staging flows you run in the UI, but in a
+              guided, repeatable sequence.
             </p>
             <p className="mt-2 text-xs text-gray-500 dark:text-gray-500 font-jetbrains-mono">
               Note: I can't log in as your account from here, so this is the
@@ -171,7 +167,6 @@ export default function AIE2ETestsPage() {
                 stagingCostPerPhotoWithCustomFurniture={
                   stagingCostPerPhotoWithCustomFurniture
                 }
-                virtualTourCost={AI_FAKE360_CREDIT_COST}
                 estimatedTotalCost={estimatedTotalCost}
                 missingCreditsText={missingCreditsText}
                 ackCredits={ackCredits}

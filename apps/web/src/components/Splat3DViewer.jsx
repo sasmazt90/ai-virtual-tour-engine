@@ -17,6 +17,58 @@ function safeVector(raw, fallback) {
   return next.every((v) => Number.isFinite(v)) ? next : fallback;
 }
 
+async function fitCameraToScene(viewer) {
+  const splatMesh =
+    typeof viewer?.getSplatMesh === "function" ? viewer.getSplatMesh() : null;
+  const count =
+    typeof splatMesh?.getSplatCount === "function"
+      ? Number(splatMesh.getSplatCount() || 0)
+      : 0;
+
+  if (!splatMesh || !Number.isFinite(count) || count <= 0) return count;
+
+  const THREE = await import("three");
+  const sample = new THREE.Vector3();
+  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  const step = Math.max(1, Math.floor(count / 2500));
+
+  for (let i = 0; i < count; i += step) {
+    splatMesh.getSplatCenter(i, sample, true);
+    min.min(sample);
+    max.max(sample);
+  }
+
+  if (
+    !Number.isFinite(min.x) ||
+    !Number.isFinite(min.y) ||
+    !Number.isFinite(min.z) ||
+    !Number.isFinite(max.x) ||
+    !Number.isFinite(max.y) ||
+    !Number.isFinite(max.z)
+  ) {
+    return count;
+  }
+
+  const box = new THREE.Box3(min, max);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const radius = Math.max(size.length() * 0.55, 2);
+
+  if (viewer.camera) {
+    viewer.camera.position.set(center.x, center.y - radius * 2.2, center.z + radius * 0.7);
+    viewer.camera.lookAt(center);
+    viewer.camera.updateProjectionMatrix?.();
+  }
+
+  if (viewer.controls) {
+    viewer.controls.target.copy(center);
+    viewer.controls.update?.();
+  }
+
+  return count;
+}
+
 export default function Splat3DViewer({ tourPayload, height }) {
   const rootRef = useRef(null);
   const viewerRef = useRef(null);
@@ -81,10 +133,7 @@ export default function Splat3DViewer({ tourPayload, height }) {
 
         await viewer.addSplatScene(fileUrl, sceneOptions);
 
-        const splatCount =
-          typeof viewer.getSplatMesh === "function"
-            ? Number(viewer.getSplatMesh()?.getSplatCount?.() || 0)
-            : 0;
+        const splatCount = await fitCameraToScene(viewer);
 
         if (!Number.isFinite(splatCount) || splatCount <= 0) {
           throw new Error("The 3D scan file did not contain renderable points.");

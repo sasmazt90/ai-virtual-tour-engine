@@ -137,46 +137,6 @@ export function useE2ETests({
     ],
   );
 
-  const runTour = useCallback(async () => {
-    pushResult({
-      test: "Test 4: Virtual Tour = Default",
-      status: "queued",
-      jobId: null,
-      details: "Starting…",
-    });
-
-    const res = await fetch("/api/ai/virtual-tour/create", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        propertyId: selectedPropertyId,
-        baseView: { type: "default", stagingId: null },
-      }),
-    });
-
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body?.error || "Could not start virtual tour");
-    }
-
-    const json = await res.json();
-    const jobId = json?.jobId;
-    if (!jobId) {
-      throw new Error("Virtual tour did not return a jobId");
-    }
-
-    updateLastResult({ status: "running", jobId, details: "Running…" });
-
-    const done = await pollJob({ jobId, timeoutMs: 6 * 60 * 1000 });
-
-    if (done?.status !== "succeeded") {
-      const msg = done?.error || "Job failed";
-      updateLastResult({ status: "fail", details: msg });
-      return;
-    }
-
-    updateLastResult({ status: "pass", details: "Succeeded" });
-  }, [pushResult, selectedPropertyId, updateLastResult]);
 
   const runE2E = useCallback(async () => {
     if (!selectedPropertyId) {
@@ -212,8 +172,6 @@ export function useE2ETests({
         withCustomFurniture: true,
       });
 
-      await runTour();
-
       await queryClient.invalidateQueries({ queryKey: ["property"] });
       await queryClient.invalidateQueries({ queryKey: ["properties"] });
       await queryClient.invalidateQueries({ queryKey: ["properties", "e2e"] });
@@ -227,7 +185,7 @@ export function useE2ETests({
     } finally {
       setE2eRunning(false);
     }
-  }, [firstPhotoId, queryClient, runStaging, runTour, selectedPropertyId]);
+  }, [firstPhotoId, queryClient, runStaging, selectedPropertyId]);
 
   return {
     e2eRunning,

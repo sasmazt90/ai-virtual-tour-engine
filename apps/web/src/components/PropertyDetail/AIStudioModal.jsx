@@ -1,7 +1,6 @@
 import { Loader2, Sparkles, Coins } from "lucide-react";
 import { useMemo } from "react";
 import { ModalShell } from "./ModalShell";
-import Fake360Viewer from "@/components/Fake360Viewer";
 import { useAIBusy } from "@/hooks/useAIBusy";
 import { StatusBanner } from "@/components/StatusBanner";
 
@@ -25,9 +24,7 @@ export function AIStudioModal({
   userId,
   creditsBalance,
   estimatedStagingCredits,
-  estimatedTourCredits,
   canRunStaging,
-  canRunTour,
   stagingType,
   setStagingType,
   preferredItemFiles,
@@ -49,20 +46,10 @@ export function AIStudioModal({
   createStagingMutation,
   stagingJobDone,
   onRefreshAfterJob,
-  tourBase,
-  setTourBase,
   property,
   formatStagingLabel,
-  tourJobStatus,
-  tourJobProgress,
-  tourJobError,
-  tourJobId,
-  setTourJobId,
-  createTourMutation,
-  tourJobDone,
   aiError,
   lastStagingCreditCost,
-  lastTourCreditCost,
 }) {
   const { data: busyData } = useAIBusy(userId, {
     enabled: !!userId && !!aiStudioOpen,
@@ -111,8 +98,8 @@ export function AIStudioModal({
                 ) : null}
               </div>
               <div className="mt-1 text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
-                Balance: {creditsBalance.toLocaleString()} • Staging cost:{" "}
-                {estimatedStagingCredits} • Tour cost: {estimatedTourCredits}
+                Balance: {creditsBalance.toLocaleString()} - Staging cost:{" "}
+                {estimatedStagingCredits}
               </div>
               {busyQueueNoteNode}
             </div>
@@ -123,9 +110,9 @@ export function AIStudioModal({
               Buy credits
             </a>
           </div>
-          {!canRunStaging || !canRunTour ? (
+          {!canRunStaging ? (
             <div className="mt-3 text-sm text-red-600 dark:text-red-400 font-jetbrains-mono">
-              Not enough credits for one or more actions.
+              Not enough credits for staging.
             </div>
           ) : null}
         </div>
@@ -362,132 +349,6 @@ export function AIStudioModal({
             </div>
           ) : null}
         </div>
-
-        {/* VIRTUAL TOUR */}
-        <div className="space-y-6">
-          <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 font-jetbrains-mono">
-            Virtual Tour (Fake-360)
-          </h4>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 font-jetbrains-mono">
-                Base View
-              </label>
-              <select
-                value={tourBase}
-                onChange={(e) => setTourBase(e.target.value)}
-                className="w-full px-4 py-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-[var(--brand)] font-jetbrains-mono"
-              >
-                <option value="default">Default View (property photos)</option>
-                {(property?.stagings || []).map((s) => (
-                  <option key={s.id} value={`staging:${s.id}`}>
-                    Staging: {formatStagingLabel(s)}
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500 dark:text-gray-500 font-jetbrains-mono">
-                We build scenes from your images and connect them with arrow
-                hotspots.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 font-jetbrains-mono">
-                Generate
-              </label>
-              <div className="flex items-center gap-2">
-                {tourJobStatus === "failed" && tourJobId ? (
-                  <button
-                    type="button"
-                    disabled={retryJobMutation.isPending}
-                    onClick={async () => {
-                      setAiError(null);
-                      const data =
-                        await retryJobMutation.mutateAsync(tourJobId);
-                      setTourJobId(data.jobId);
-                    }}
-                    className="inline-flex items-center justify-center gap-2 px-4 py-3 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg font-medium transition-colors disabled:opacity-50 font-jetbrains-mono"
-                  >
-                    Retry
-                  </button>
-                ) : null}
-
-                <div className="flex flex-col w-full">
-                  <div className="mb-1 inline-flex items-center gap-1 text-xs text-gray-700 dark:text-gray-300 font-jetbrains-mono">
-                    <Coins size={14} />
-                    <span>
-                      {Number(estimatedTourCredits || 0).toLocaleString()}{" "}
-                      credits
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={!canRunTour || createTourMutation.isPending}
-                    onClick={() => createTourMutation.mutate()}
-                    className="inline-flex items-center justify-center gap-2 w-full px-6 py-3 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg font-medium hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50 font-jetbrains-mono"
-                  >
-                    {createTourMutation.isPending ? (
-                      <Loader2 size={18} className="animate-spin" />
-                    ) : null}
-                    Generate Virtual Tour
-                  </button>
-                </div>
-              </div>
-              <div className="text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
-                Tour job: {tourJobStatus || "idle"}
-                {tourJobStatus ? ` • ${tourJobProgress}%` : ""}
-                {tourJobError ? ` • ${tourJobError}` : ""}
-              </div>
-
-              <div className="text-xs text-gray-500 dark:text-gray-500 font-jetbrains-mono">
-                Credits are consumed when you click Generate. Saving or
-                discarding results is free.
-              </div>
-
-              {lastTourCreditCost ? (
-                <div className="text-xs text-gray-600 dark:text-gray-400 font-jetbrains-mono">
-                  Credits have been consumed for this generation (
-                  {Number(lastTourCreditCost).toLocaleString()}).
-                </div>
-              ) : null}
-
-              {busyHint ? (
-                <div className="text-xs text-gray-500 dark:text-gray-500 font-jetbrains-mono">
-                  {busyHint}
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          {tourJobDone ? (
-            <div className="flex items-center justify-end">
-              <button
-                type="button"
-                onClick={onRefreshAfterJob}
-                className="text-sm text-[var(--brandDark)] dark:text-[var(--brand)] hover:underline font-jetbrains-mono"
-              >
-                Refresh property assets
-              </button>
-            </div>
-          ) : null}
-
-          {property?.tours && property.tours.length > 0 ? (
-            (() => {
-              const latest =
-                property.tours.find((t) => t.tour_type === "fake360") || null;
-              if (!latest || !latest.tour_payload) {
-                return null;
-              }
-              return <Fake360Viewer tourPayload={latest.tour_payload} />;
-            })()
-          ) : (
-            <div className="text-sm text-gray-600 dark:text-gray-400 font-jetbrains-mono">
-              No tours yet.
-            </div>
-          )}
-        </div>
-
         {aiError ? (
           <StatusBanner variant="error">{aiError}</StatusBanner>
         ) : null}

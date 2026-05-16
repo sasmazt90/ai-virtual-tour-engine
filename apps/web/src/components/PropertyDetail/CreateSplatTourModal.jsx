@@ -1,24 +1,74 @@
 import { useCallback, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Upload } from "lucide-react";
-import { useUpload } from "@/utils/useUpload";
 import { ModalShell } from "./ModalShell";
 
 const SUPPORTED_EXTENSIONS = new Set(["ply", "splat", "ksplat"]);
+const MAX_SCAN_BYTES = 750 * 1024 * 1024;
 
 function extensionFromName(name) {
   return String(name || "").split(".").pop()?.toLowerCase().trim() || "";
 }
 
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";
+  const mb = bytes / 1024 / 1024;
+  if (mb < 1024) return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
+  return `${(mb / 1024).toFixed(1)} GB`;
+}
+
+function uploadLargeScan(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload/large");
+    xhr.setRequestHeader(
+      "Content-Type",
+      file.type || "application/octet-stream",
+    );
+    xhr.setRequestHeader("X-Filename", encodeURIComponent(file.name || "scan"));
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      const progress = Math.round((event.loaded / event.total) * 100);
+      onProgress(Math.max(0, Math.min(100, progress)));
+    };
+
+    xhr.onload = () => {
+      let body = {};
+      try {
+        body = JSON.parse(xhr.responseText || "{}");
+      } catch {
+        body = {};
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300 && body?.url) {
+        resolve(body);
+        return;
+      }
+
+      reject(
+        new Error(
+          body?.error ||
+            `3D scan upload failed: [${xhr.status}] ${xhr.statusText}`,
+        ),
+      );
+    };
+
+    xhr.onerror = () => reject(new Error("3D scan upload failed."));
+    xhr.onabort = () => reject(new Error("3D scan upload was cancelled."));
+    xhr.send(file);
+  });
+}
+
 export function CreateSplatTourModal({ open, onClose, propertyId, userId }) {
   const queryClient = useQueryClient();
-  const [upload, { loading: uploadLoading }] = useUpload();
   const [file, setFile] = useState(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const format = useMemo(() => extensionFromName(file?.name), [file?.name]);
-  const disableActions = uploadLoading || status === "saving";
+  const disableActions = status === "uploading" || status === "saving";
 
   const safeOnClose = useCallback(() => {
     if (disableActions) return;
@@ -45,14 +95,27 @@ export function CreateSplatTourModal({ open, onClose, propertyId, userId }) {
       return;
     }
 
-    setStatus("saving");
+    if (file.size > MAX_SCAN_BYTES) {
+      setError(
+        `3D scan is too large (${formatFileSize(file.size)}). Please upload a file under ${formatFileSize(
+          MAX_SCAN_BYTES,
+        )}.`,
+      );
+      setStatus("error");
+      return;
+    }
+
+    setStatus("uploading");
+    setUploadProgress(0);
     setError("");
 
     try {
-      const uploaded = await upload({ file });
+      const uploaded = await uploadLargeScan(file, setUploadProgress);
       if (uploaded?.error || !uploaded?.url) {
         throw new Error(uploaded?.error || "Upload failed.");
       }
+
+      setStatus("saving");
 
       const res = await fetch("/api/virtual-tours/splat", {
         method: "POST",
@@ -80,13 +143,14 @@ export function CreateSplatTourModal({ open, onClose, propertyId, userId }) {
 
       setFile(null);
       setStatus("idle");
+      setUploadProgress(0);
       onClose();
     } catch (err) {
       console.error(err);
       setStatus("error");
       setError(err instanceof Error ? err.message : "Could not save 3D tour.");
     }
-  }, [file, onClose, propertyId, queryClient, upload, userId]);
+  }, [file, onClose, propertyId, queryClient, userId]);
 
   if (!open) return null;
 
@@ -98,11 +162,12 @@ export function CreateSplatTourModal({ open, onClose, propertyId, userId }) {
             <Upload className="mt-0.5 h-5 w-5 text-amber-500" />
             <div>
               <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 font-jetbrains-mono">
-                Gaussian Splat scan
+                3D scan
               </div>
               <p className="mt-1 text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
-                Upload a 3D scan exported as .ply, .splat or .ksplat. This will
-                replace the existing Original virtual tour for this property.
+                Upload a ready 3D tour file exported as .ply, .splat or .ksplat.
+                This will replace the current Original virtual tour for this
+                property.
               </p>
             </div>
           </div>
@@ -116,25 +181,32 @@ export function CreateSplatTourModal({ open, onClose, propertyId, userId }) {
             type="file"
             accept=".ply,.splat,.ksplat"
             disabled={disableActions}
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
+            onChange={(e) => {
+              setFile(e.target.files?.[0] || null);
+              setError("");
+              setStatus("idle");
+              setUploadProgress(0);
+            }}
             className="mt-2 block w-full text-sm text-gray-700 dark:text-gray-200 font-jetbrains-mono file:mr-3 file:rounded-md file:border-0 file:bg-amber-500 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-amber-600"
           />
           {file ? (
             <div className="mt-2 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
-              {file.name} • {(file.size / 1024 / 1024).toFixed(1)} MB •{" "}
-              {format || "unknown"}
+              {file.name} - {formatFileSize(file.size)} -{" "}
+              {format || "unknown"} - Limit {formatFileSize(MAX_SCAN_BYTES)}
             </div>
           ) : null}
         </div>
 
         <div className="text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
-          Tip: for faster loading on the web, export or convert large scans to
-          .ksplat before uploading.
+          Tip: for faster loading on the web, use .splat or .ksplat for large
+          scans.
         </div>
 
-        {status === "saving" ? (
+        {status === "uploading" || status === "saving" ? (
           <div className="text-sm text-gray-700 dark:text-gray-200 font-jetbrains-mono">
-            Uploading and saving 3D tour...
+            {status === "uploading"
+              ? `Uploading 3D scan... ${uploadProgress}%`
+              : "Saving 3D tour..."}
           </div>
         ) : null}
 

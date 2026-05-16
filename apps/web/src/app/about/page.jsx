@@ -40,7 +40,7 @@ export default function AboutPage() {
           <p className="mt-3 text-gray-600 dark:text-gray-300 font-jetbrains-mono">
             Real estate is a coordination problem: properties, people,
             documents, and deadlines. 360 Estate Suite brings these together
-            with AI staging, Fake-360 tours, contracts with PDFs, secure share
+            with AI staging, 3D tours, contracts with PDFs, secure share
             links, and a credit-based model so you pay for what you use.
           </p>
         </section>

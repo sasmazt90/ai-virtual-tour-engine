@@ -1,7 +1,6 @@
 export function CreditEstimate({
   stagingCostPerPhoto,
   stagingCostPerPhotoWithCustomFurniture,
-  virtualTourCost,
   estimatedTotalCost,
   missingCreditsText,
   ackCredits,
@@ -17,8 +16,7 @@ export function CreditEstimate({
         Staging (Vacant): {Number(stagingCostPerPhoto).toLocaleString()} •
         Staging (Luxury): {Number(stagingCostPerPhoto).toLocaleString()} •
         Staging (Modern + Custom):{" "}
-        {Number(stagingCostPerPhotoWithCustomFurniture).toLocaleString()} •
-        Virtual Tour: {Number(virtualTourCost).toLocaleString()}
+        {Number(stagingCostPerPhotoWithCustomFurniture).toLocaleString()}
       </div>
       <div className="mt-2 text-sm text-gray-900 dark:text-gray-100 font-jetbrains-mono">
         Total: {Number(estimatedTotalCost || 0).toLocaleString()} credits

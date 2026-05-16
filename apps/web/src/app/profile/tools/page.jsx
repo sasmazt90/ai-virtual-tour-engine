@@ -8,7 +8,6 @@ import {
 } from "@/utils/shareLinksConfig";
 import {
   AI_STAGING_CREDIT_COST,
-  AI_FAKE360_CREDIT_COST,
 } from "@/app/api/utils/pricing";
 
 function statusBadgeClass(status) {
@@ -474,14 +473,6 @@ export default function ToolsConfigPage() {
                   </div>
                   <div className="text-sm text-gray-900 dark:text-gray-100 font-jetbrains-mono">
                     {AI_STAGING_CREDIT_COST}
-                  </div>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
-                    Virtual Tour (Fake360)
-                  </div>
-                  <div className="text-sm text-gray-900 dark:text-gray-100 font-jetbrains-mono">
-                    {AI_FAKE360_CREDIT_COST}
                   </div>
                 </div>
               </div>

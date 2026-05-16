@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { auth } from "@/auth";
 
-const MAX_VIDEO_BYTES = 750 * 1024 * 1024;
+const MAX_FILE_BYTES = 750 * 1024 * 1024;
 
 const VIDEO_EXTENSIONS = {
   "video/mp4": "mp4",
@@ -10,7 +10,14 @@ const VIDEO_EXTENSIONS = {
   "video/m4v": "m4v",
 };
 
-const SAFE_EXTENSIONS = new Set(["mp4", "mov", "m4v"]);
+const MODEL_EXTENSIONS = {
+  "model/vnd.ply": "ply",
+  "application/octet-stream": "",
+};
+
+const SAFE_EXTENSIONS = new Set(["mp4", "mov", "m4v", "ply", "splat", "ksplat"]);
+const VIDEO_SAFE_EXTENSIONS = new Set(["mp4", "mov", "m4v"]);
+const MODEL_SAFE_EXTENSIONS = new Set(["ply", "splat", "ksplat"]);
 
 function getSupabaseStorageConfig() {
   const url = process.env.SUPABASE_URL;
@@ -35,8 +42,15 @@ function extensionFromMime(mimeType, filename) {
   return (
     extensionFromFilename(filename) ||
     VIDEO_EXTENSIONS[String(mimeType || "").toLowerCase()] ||
+    MODEL_EXTENSIONS[String(mimeType || "").toLowerCase()] ||
     ""
   );
+}
+
+function folderForExtension(ext) {
+  if (VIDEO_SAFE_EXTENSIONS.has(ext)) return "video-uploads";
+  if (MODEL_SAFE_EXTENSIONS.has(ext)) return "3d-scans";
+  return "uploads";
 }
 
 export async function POST(request) {
@@ -55,9 +69,9 @@ export async function POST(request) {
     }
 
     const contentLength = Number(request.headers.get("content-length") || 0);
-    if (contentLength && contentLength > MAX_VIDEO_BYTES) {
+    if (contentLength && contentLength > MAX_FILE_BYTES) {
       return Response.json(
-        { error: "Video is too large. Please upload a file under 750 MB." },
+        { error: "File is too large. Please upload a file under 750 MB." },
         { status: 413 },
       );
     }
@@ -73,12 +87,15 @@ export async function POST(request) {
 
     if (!SAFE_EXTENSIONS.has(ext)) {
       return Response.json(
-        { error: "Supported video formats are .mp4, .mov and .m4v." },
+        {
+          error:
+            "Supported large upload formats are .mp4, .mov, .m4v, .ply, .splat and .ksplat.",
+        },
         { status: 400 },
       );
     }
 
-    const objectPath = `video-uploads/${new Date()
+    const objectPath = `${folderForExtension(ext)}/${new Date()
       .toISOString()
       .slice(0, 10)}/${crypto.randomUUID()}.${ext}`;
 
@@ -119,7 +136,7 @@ export async function POST(request) {
   } catch (error) {
     console.error("POST /api/upload/large error:", error);
     return Response.json(
-      { error: "Failed to upload large video." },
+      { error: "Failed to upload large file." },
       { status: 500 },
     );
   }

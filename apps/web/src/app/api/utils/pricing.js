@@ -8,9 +8,6 @@ export const AI_STAGING_CUSTOM_CREDIT_COST = 30;
 // Charging is per-photo, so larger batches can be done by running multiple jobs.
 export const AI_STAGING_MAX_PHOTOS_PER_JOB = 12;
 
-export const AI_FAKE360_CREDIT_COST = 10;
-export const AI_FAKE360_CUSTOM_CREDIT_COST = 15;
-
 export function calculateStagingCreditCost({
   hasPreferredItems,
   hasCustomAssets,
@@ -26,18 +23,4 @@ export function calculateStagingCreditCost({
 
   const qty = Math.max(1, Number(photoCount || 1) || 1);
   return perPhoto * qty;
-}
-
-export function calculateVirtualTourCreditCost({
-  sourceType,
-  stagingHasCustomFurniture,
-}) {
-  const st = sourceType === "staging";
-  const custom = !!stagingHasCustomFurniture;
-
-  if (st && custom) {
-    return AI_FAKE360_CUSTOM_CREDIT_COST;
-  }
-
-  return AI_FAKE360_CREDIT_COST;
 }

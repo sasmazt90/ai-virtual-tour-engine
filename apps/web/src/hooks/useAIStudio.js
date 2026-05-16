@@ -10,12 +10,9 @@ export function useAIStudio(userId, propertyId, property) {
   const [preferredItemFiles, setPreferredItemFiles] = useState([]);
   const [aiError, setAiError] = useState(null);
   const [stagingJobId, setStagingJobId] = useState(null);
-  const [tourBase, setTourBase] = useState("default");
-  const [tourJobId, setTourJobId] = useState(null);
 
   // NEW (policy/UI2): remember the exact backend-reported credit cost for the latest generation.
   const [lastStagingCreditCost, setLastStagingCreditCost] = useState(null);
-  const [lastTourCreditCost, setLastTourCreditCost] = useState(null);
 
   const [upload, { loading: preferredItemsUploading }] = useUpload();
 
@@ -92,33 +89,9 @@ export function useAIStudio(userId, propertyId, property) {
     },
   });
 
-  const { data: tourJobData } = useQuery({
-    queryKey: ["ai-tour-job", userId, tourJobId],
-    queryFn: async () => {
-      if (!tourJobId) return null;
-      const res = await fetch(`/api/ai/jobs/${tourJobId}`);
-      if (!res.ok) {
-        throw new Error("Could not load job status.");
-      }
-      return res.json();
-    },
-    enabled: !!userId && !!tourJobId,
-    refetchInterval: (query) => {
-      const status = query?.state?.data?.status;
-      if (status === "queued" || status === "running") {
-        return 2000;
-      }
-      return false;
-    },
-  });
-
   const jobStatus = jobData?.status || null;
   const jobProgress = jobData?.progress ?? 0;
   const jobError = jobData?.error || null;
-
-  const tourJobStatus = tourJobData?.status || null;
-  const tourJobProgress = tourJobData?.progress ?? 0;
-  const tourJobError = tourJobData?.error || null;
 
   const retryJobMutation = useMutation({
     mutationFn: async (id) => {
@@ -224,65 +197,10 @@ export function useAIStudio(userId, propertyId, property) {
     },
   });
 
-  const createTourMutation = useMutation({
-    mutationFn: async () => {
-      const baseView = (() => {
-        if (tourBase && tourBase.startsWith("staging:")) {
-          const stagingId = tourBase.replace("staging:", "");
-          return { type: "staging", stagingId };
-        }
-        return { type: "default", stagingId: null };
-      })();
-
-      const res = await fetch("/api/ai/virtual-tour/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          propertyId,
-          baseView,
-        }),
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-
-        if (res.status === 402) {
-          const message =
-            body?.error || "Not enough credits to start this job.";
-          throw new Error(message);
-        }
-
-        if (res.status === 401) {
-          throw new Error("Please sign in again to start this job.");
-        }
-
-        throw new Error(
-          body?.error || "Could not start the virtual tour. Please try again.",
-        );
-      }
-
-      return res.json();
-    },
-    onSuccess: (data) => {
-      setAiError(null);
-      setTourJobId(data.jobId);
-      setLastTourCreditCost(
-        Number(data?.creditCost ?? data?.creditsReserved ?? 0) || null,
-      );
-      queryClient.invalidateQueries({ queryKey: ["credits", userId] });
-    },
-    onError: (err) => {
-      console.error(err);
-      setAiError(err?.message || "Could not start the virtual tour.");
-    },
-  });
-
   const onOpenAiStudio = useCallback(() => {
     setAiError(null);
     setStagingJobId(null);
-    setTourJobId(null);
     setLastStagingCreditCost(null);
-    setLastTourCreditCost(null);
     setAiStudioOpen(true);
   }, []);
 
@@ -291,8 +209,6 @@ export function useAIStudio(userId, propertyId, property) {
   }, []);
 
   const stagingJobDone = jobStatus === "succeeded" || jobStatus === "failed";
-  const tourJobDone =
-    tourJobStatus === "succeeded" || tourJobStatus === "failed";
 
   return {
     aiStudioOpen,
@@ -310,28 +226,17 @@ export function useAIStudio(userId, propertyId, property) {
     setAiError,
     stagingJobId,
     setStagingJobId,
-    tourBase,
-    setTourBase,
-    tourJobId,
-    setTourJobId,
     customAssets,
     refetchCustomAssets,
     jobData,
     jobStatus,
     jobProgress,
     jobError,
-    tourJobData,
-    tourJobStatus,
-    tourJobProgress,
-    tourJobError,
     retryJobMutation,
     createStagingMutation,
-    createTourMutation,
     onOpenAiStudio,
     onCloseAiStudio,
     stagingJobDone,
-    tourJobDone,
     lastStagingCreditCost,
-    lastTourCreditCost,
   };
 }

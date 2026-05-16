@@ -2,7 +2,6 @@ import { useCallback, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import Fake360Viewer from "@/components/Fake360Viewer";
 import Splat3DViewer from "@/components/Splat3DViewer";
-import { CreateVirtualTourModal } from "./CreateVirtualTourModal";
 import { CreateSplatTourModal } from "./CreateSplatTourModal";
 import { CreateVideo3DTourModal } from "./CreateVideo3DTourModal";
 import { ModalShell } from "./ModalShell";
@@ -10,16 +9,20 @@ import { titleCase } from "@/utils/formatters";
 
 export function VirtualToursSection({ property, propertyId }) {
   const queryClient = useQueryClient();
-  const [createOpen, setCreateOpen] = useState(false);
   const [splatOpen, setSplatOpen] = useState(false);
   const [video3DOpen, setVideo3DOpen] = useState(false);
   const [viewTourId, setViewTourId] = useState(null);
 
   const userId = property?.user_id || null;
 
-  // List saved tours (fake360/node360/panorama). Enforce 1-per-source slot in UI.
   const tours = useMemo(() => {
-    const list = Array.isArray(property?.tours) ? property.tours : [];
+    const list = Array.isArray(property?.tours)
+      ? property.tours.filter(
+          (tour) =>
+            tour?.tour_type !== "fake360" &&
+            tour?.tour_payload?.type !== "fake360",
+        )
+      : [];
 
     const sorted = list
       .slice()
@@ -28,7 +31,6 @@ export function VirtualToursSection({ property, propertyId }) {
           new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
       );
 
-    // Deduplicate by source slot (original OR staging type)
     const byKey = new Map();
     for (const t of sorted) {
       const sourceType =
@@ -65,9 +67,9 @@ export function VirtualToursSection({ property, propertyId }) {
       } else if (t?.source_type === "staging") {
         const st =
           typeof t?.staging_type === "string" ? t.staging_type.trim() : "";
-        map[t.id] = `Virtual Tour – ${titleCase(st || "Staging")}`;
+        map[t.id] = `Virtual Tour - ${titleCase(st || "Staging")}`;
       } else {
-        map[t.id] = "Virtual Tour – Original";
+        map[t.id] = "Virtual Tour - Original";
       }
     }
 
@@ -97,7 +99,6 @@ export function VirtualToursSection({ property, propertyId }) {
           );
         }
 
-        // FIX: invalidate the same key used by usePropertyData
         if (userId && propertyId) {
           await queryClient.invalidateQueries({
             queryKey: ["property", userId, propertyId],
@@ -136,13 +137,6 @@ export function VirtualToursSection({ property, propertyId }) {
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-500/70 text-amber-600 dark:text-amber-300 text-sm font-medium hover:bg-amber-50 dark:hover:bg-amber-500/10 font-jetbrains-mono"
           >
             + 3D File
-          </button>
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800 font-jetbrains-mono"
-          >
-            + Fake-360
           </button>
         </div>
       </div>
@@ -198,15 +192,6 @@ export function VirtualToursSection({ property, propertyId }) {
           No virtual tours yet.
         </div>
       )}
-
-      <CreateVirtualTourModal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        propertyId={propertyId}
-        userId={userId}
-        stagings={property?.stagings || []}
-        tours={property?.tours || []}
-      />
 
       <CreateSplatTourModal
         open={splatOpen}

@@ -16,7 +16,7 @@ export default function FAQPage() {
     () => [
       {
         q: "What is 360 Estate Suite?",
-        a: "360 Estate Suite is an all-in-one AI-powered real estate operating system designed for agents and teams. It combines AI staging, Fake-360 virtual tours, contract creation with PDFs, secure client share links, and client management so you can run more of your listing workflow in one place.",
+        a: "360 Estate Suite is an all-in-one AI-powered real estate operating system designed for agents and teams. It combines AI staging, 3D virtual tours, contract creation with PDFs, secure client share links, and client management so you can run more of your listing workflow in one place.",
       },
       {
         q: "Who is 360 Estate Suite for?",
@@ -27,8 +27,8 @@ export default function FAQPage() {
         a: "AI staging helps you turn a property photo into a more presentation-ready version. You can create new staging looks without scheduling physical staging or multiple photo shoots. It’s ideal for accelerating time-to-list, improving first impressions, and helping buyers visualize potential.",
       },
       {
-        q: "How do Fake-360 virtual tours work?",
-        a: "Fake-360 tours create an immersive, scrollable viewing experience from generated scenes. It’s a practical way to offer a tour-like experience without specialized equipment, while still improving online engagement for listings.",
+        q: "How do 3D virtual tours work?",
+        a: "You can create a 3D tour from an iPhone walkthrough video or upload a ready 3D scan file. The result can be saved to the property and shared with clients as part of the listing assets.",
       },
       {
         q: "What are coins and what are they used for?",

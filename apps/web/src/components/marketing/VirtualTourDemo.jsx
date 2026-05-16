@@ -201,7 +201,7 @@ export default function VirtualTourDemo({ emptySrc, stagedSrc, height = 420 }) {
         ) : null}
 
         <div className="absolute top-4 left-4 rounded-full border border-white/10 bg-black/[0.55] px-3 py-1 text-xs text-gray-100 font-jetbrains-mono">
-          Fake-360 tour demo • {active.title}
+          Virtual tour demo - {active.title}
         </div>
 
         {/* Floor arrows */}

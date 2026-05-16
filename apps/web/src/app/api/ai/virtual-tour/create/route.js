@@ -1,34 +1,4 @@
 import sql from "@/app/api/utils/sql";
-import { auth } from "@/auth";
-import {
-  calculateVirtualTourCreditCost,
-  AI_FAKE360_CREDIT_COST,
-} from "@/app/api/utils/pricing";
-import { getDbUserIdFromSession } from "@/app/api/utils/dbUser";
-
-function makeFake360Payload(imageUrls) {
-  // A Fake-360 tour is a *single camera position* 360 "spin".
-  // We store `frames` as the primary representation for smooth rotation.
-  // We also keep `scenes` as a backward-compatible list so public share links
-  // can proxy images via the existing per-scene download endpoint.
-  const frames = imageUrls.filter(Boolean);
-  const scenes = frames.map((url, idx) => {
-    return {
-      sceneId: `F${idx + 1}`,
-      imageUrl: url,
-      initialYaw: 0,
-      hotspots: [],
-    };
-  });
-
-  return {
-    type: "fake360",
-    frames,
-    steps: frames.length,
-    initialIndex: 0,
-    scenes,
-  };
-}
 
 function directionToHotspotXY(direction) {
   // consistent, “floor arrow” placements
@@ -446,10 +416,14 @@ export async function processVirtualTourJob({ jobId }) {
 
     await heartbeat({ jobId, progress: 50 });
 
-    const nodePayload = await buildNode360PayloadWithOpenAI(imageUrls);
-    const tourPayload = nodePayload || makeFake360Payload(imageUrls);
+    const tourPayload = await buildNode360PayloadWithOpenAI(imageUrls);
+    if (!tourPayload) {
+      throw new Error(
+        "Photo-based virtual tours are no longer supported. Upload an iPhone video or a 3D scan instead.",
+      );
+    }
 
-    const tourType = nodePayload ? "panorama" : "fake360";
+    const tourType = "panorama";
 
     // Slot logic: only ONE tour per source (original) and per staging type.
     // Overwrite existing in-place rather than inserting duplicates.
@@ -520,194 +494,12 @@ export async function processVirtualTourJob({ jobId }) {
   }
 }
 
-export async function POST(request) {
-  try {
-    const session = await auth();
-    if (!session || !session.user?.id) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const userId = await getDbUserIdFromSession(session);
-    if (!userId) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    const body = await request.json();
-
-    const propertyId = body?.propertyId;
-    const baseView = body?.baseView || { type: "default", stagingId: null };
-
-    if (!propertyId) {
-      return Response.json(
-        { error: "propertyId is required" },
-        { status: 400 },
-      );
-    }
-
-    const props = await sql(
-      "SELECT id FROM properties WHERE id = $1 AND user_id = $2 LIMIT 1",
-      [propertyId, userId],
-    );
-
-    if (props.length === 0) {
-      return Response.json({ error: "Property not found" }, { status: 404 });
-    }
-
-    // Determine whether this tour is based on a custom-furniture staging (preferred items or custom assets).
-    let sourceType = "original";
-    let stagingHasCustomFurniture = false;
-
-    if (baseView?.type === "staging" && baseView?.stagingId) {
-      sourceType = "staging";
-
-      const stRows = await sql(
-        "SELECT meta FROM stagings WHERE id = $1 AND property_id = $2 LIMIT 1",
-        [baseView.stagingId, propertyId],
-      );
-
-      const meta = stRows?.[0]?.meta || {};
-      const preferredImgs = Array.isArray(meta?.preferredItemImages)
-        ? meta.preferredItemImages
-        : [];
-      const customAssetIdsUsed = Array.isArray(meta?.customAssetIdsUsed)
-        ? meta.customAssetIdsUsed
-        : [];
-
-      stagingHasCustomFurniture =
-        preferredImgs.length > 0 || customAssetIdsUsed.length > 0;
-    }
-
-    const creditsReserved = calculateVirtualTourCreditCost({
-      sourceType,
-      stagingHasCustomFurniture,
-    });
-
-    const requestPayload = {
-      baseView,
-      tourType: "node360",
-      creditCost: creditsReserved,
-      baseCost: AI_FAKE360_CREDIT_COST,
-      sourceType,
-      stagingHasCustomFurniture,
-    };
-
-    const spendMeta = {
-      kind: "reserve",
-      jobType: "virtual_tour",
-      creditCost: creditsReserved,
-      baseCost: AI_FAKE360_CREDIT_COST,
-      sourceType,
-      stagingHasCustomFurniture,
-    };
-
-    const createdRows = await sql(
-      `
-        WITH existing_job AS (
-          SELECT id, job_status
-          FROM ai_jobs
-          WHERE user_id = $1
-            AND property_id = $2
-            AND job_type = 'virtual_tour'
-            AND job_status IN ('queued','running')
-            AND request_payload->>'tourType' = 'node360'
-            AND request_payload->'baseView' = $3::jsonb
-          ORDER BY created_at DESC
-          LIMIT 1
-        ),
-        ensured_wallet AS (
-          INSERT INTO credits_wallet (user_id, balance_credits)
-          VALUES ($1, 0)
-          ON CONFLICT (user_id) DO NOTHING
-        ),
-        deducted AS (
-          UPDATE credits_wallet
-          SET balance_credits = balance_credits - $4
-          WHERE user_id = $1
-            AND balance_credits >= $4
-            AND NOT EXISTS (SELECT 1 FROM existing_job)
-          RETURNING balance_credits
-        ),
-        created_job AS (
-          INSERT INTO ai_jobs (
-            user_id,
-            property_id,
-            job_type,
-            job_status,
-            progress,
-            credits_reserved,
-            request_payload,
-            started_at,
-            last_heartbeat_at
-          )
-          SELECT $1, $2, 'virtual_tour', 'queued', 0, $4, $5::jsonb, NULL, NOW()
-          WHERE NOT EXISTS (SELECT 1 FROM existing_job)
-            AND EXISTS (SELECT 1 FROM deducted)
-          RETURNING id
-        ),
-        spend_tx AS (
-          INSERT INTO credit_transactions (user_id, transaction_type, credits_delta, meta)
-          SELECT
-            $1,
-            'spend',
-            -$4,
-            jsonb_set($6::jsonb, '{jobId}', to_jsonb((SELECT id FROM created_job)))
-          WHERE EXISTS (SELECT 1 FROM created_job)
-          RETURNING id
-        )
-        SELECT
-          COALESCE((SELECT id FROM existing_job), (SELECT id FROM created_job)) AS job_id,
-          COALESCE((SELECT job_status FROM existing_job), 'queued') AS job_status,
-          CASE
-            WHEN EXISTS (SELECT 1 FROM existing_job) THEN 'deduped'
-            WHEN EXISTS (SELECT 1 FROM created_job) THEN 'created'
-            ELSE 'insufficient'
-          END AS outcome;
-      `,
-      [
-        userId,
-        propertyId,
-        JSON.stringify(baseView),
-        creditsReserved,
-        JSON.stringify(requestPayload),
-        JSON.stringify(spendMeta),
-      ],
-    );
-
-    const created = createdRows?.[0] || null;
-
-    if (!created || !created.job_id) {
-      throw new Error("Could not create job");
-    }
-
-    if (created.outcome === "insufficient") {
-      return Response.json({ error: "Insufficient credits" }, { status: 402 });
-    }
-
-    const jobId = created.job_id;
-
-    if (created.outcome === "created") {
-      const start = () => {
-        processVirtualTourJob({ jobId }).catch((e) => console.error(e));
-      };
-
-      if (typeof queueMicrotask === "function") {
-        queueMicrotask(start);
-      } else {
-        setTimeout(start, 0);
-      }
-    }
-
-    return Response.json({
-      jobId,
-      status: created.outcome === "deduped" ? "running" : "queued",
-      creditsReserved,
-      creditCost: creditsReserved,
-      deduped: created.outcome === "deduped",
-    });
-  } catch (error) {
-    console.error("POST /api/ai/virtual-tour/create error:", error);
-    return Response.json(
-      { error: error?.message || "Internal Server Error" },
-      { status: 500 },
-    );
-  }
+export async function POST() {
+  return Response.json(
+    {
+      error:
+        "Photo-based virtual tours have been removed. Upload an iPhone video or a 3D scan instead.",
+    },
+    { status: 410 },
+  );
 }
