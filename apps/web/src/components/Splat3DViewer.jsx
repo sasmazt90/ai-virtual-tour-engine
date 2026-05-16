@@ -67,8 +67,8 @@ export default function Splat3DViewer({ tourPayload, height }) {
 
         const sceneOptions = {
           showLoadingUI: true,
-          progressiveLoad: true,
-          splatAlphaRemovalThreshold: 5,
+          progressiveLoad: false,
+          splatAlphaRemovalThreshold: 0,
           position: [0, 0, 0],
           rotation: [0, 0, 0, 1],
           scale: [1, 1, 1],
@@ -80,6 +80,15 @@ export default function Splat3DViewer({ tourPayload, height }) {
         }
 
         await viewer.addSplatScene(fileUrl, sceneOptions);
+
+        const splatCount =
+          typeof viewer.getSplatMesh === "function"
+            ? Number(viewer.getSplatMesh()?.getSplatCount?.() || 0)
+            : 0;
+
+        if (!Number.isFinite(splatCount) || splatCount <= 0) {
+          throw new Error("The 3D scan file did not contain renderable points.");
+        }
 
         if (cancelled) {
           await viewer.dispose();
@@ -134,7 +143,7 @@ export default function Splat3DViewer({ tourPayload, height }) {
 
       {status === "ready" ? (
         <div className="pointer-events-none absolute left-3 bottom-3 rounded-md bg-black/55 px-3 py-2 text-xs text-white font-jetbrains-mono">
-          Drag to orbit • right-drag to pan • scroll to zoom
+          Drag to orbit - right-drag to pan - scroll to zoom
         </div>
       ) : null}
     </div>
