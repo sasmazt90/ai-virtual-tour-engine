@@ -128,6 +128,7 @@ if (process.env.AUTH_SECRET) {
     initAuthConfig((c) => ({
       secret: c.env.AUTH_SECRET,
       trustHost: true,
+      basePath: '/api/auth',
       pages: {
         signIn: '/account/signin',
         signOut: '/account/logout',
