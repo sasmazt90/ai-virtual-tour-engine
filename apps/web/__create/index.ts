@@ -145,26 +145,6 @@ if (process.env.AUTH_SECRET) {
           return session;
         },
       },
-      cookies: {
-        csrfToken: {
-          options: {
-            secure: true,
-            sameSite: 'none',
-          },
-        },
-        sessionToken: {
-          options: {
-            secure: true,
-            sameSite: 'none',
-          },
-        },
-        callbackUrl: {
-          options: {
-            secure: true,
-            sameSite: 'none',
-          },
-        },
-      },
       providers: [
         // Dev-only provider for simulated social sign-in (Google, Facebook, etc.)
         // Creates or finds a user by email without requiring a password.
