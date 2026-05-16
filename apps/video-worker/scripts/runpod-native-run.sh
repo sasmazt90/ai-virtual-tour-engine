@@ -24,7 +24,8 @@ apt-get install -y --no-install-recommends \
   git \
   libopencv-dev \
   ninja-build \
-  python3-pip
+  python3-pip \
+  xvfb
 
 if [ ! -d "$REPO_DIR/.git" ]; then
   git clone "$REPO_URL" "$REPO_DIR"

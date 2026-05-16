@@ -24,6 +24,15 @@ SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "2000"))
 
 
 def run(cmd, cwd=None):
+    if cmd and cmd[0] == "colmap" and shutil.which("xvfb-run"):
+        cmd = [
+            "xvfb-run",
+            "-a",
+            "-s",
+            "-screen 0 1280x1024x24",
+            *cmd,
+        ]
+
     print("$", " ".join(str(c) for c in cmd), flush=True)
     env = os.environ.copy()
     env["QT_QPA_PLATFORM"] = "offscreen"
