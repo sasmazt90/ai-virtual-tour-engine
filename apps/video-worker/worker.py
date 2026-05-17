@@ -145,8 +145,17 @@ def run_colmap(images_dir, work_dir):
         str(images_dir),
         "--ImageReader.single_camera",
         "1",
+        "--SiftExtraction.use_gpu",
+        "0",
     ])
-    run(["colmap", "exhaustive_matcher", "--database_path", str(db_path)])
+    run([
+        "colmap",
+        "exhaustive_matcher",
+        "--database_path",
+        str(db_path),
+        "--SiftMatching.use_gpu",
+        "0",
+    ])
     run([
         "colmap",
         "mapper",
