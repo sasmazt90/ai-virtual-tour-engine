@@ -48,8 +48,11 @@ def update_job(conn, job_id, status=None, progress=None, error=None, result=None
         values.append(status)
         if status == "running":
             sets.append("started_at = COALESCE(started_at, NOW())")
+            sets.append("error_message = NULL")
         if status in ("succeeded", "failed"):
             sets.append("completed_at = NOW()")
+        if status == "succeeded":
+            sets.append("error_message = NULL")
     if progress is not None:
         sets.append("progress = %s")
         values.append(progress)
