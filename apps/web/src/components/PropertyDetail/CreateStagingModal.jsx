@@ -16,13 +16,13 @@ import {
 } from "@/app/api/utils/pricing";
 
 const STAGING_TYPES = [
-  "default",
-  "vacant",
-  "minimalist",
-  "luxury",
-  "scandinavian",
   "classic",
+  "default",
+  "luxury",
+  "minimalist",
   "modern",
+  "scandinavian",
+  "vacant",
 ];
 
 const PHOTO_PAGE_SIZE = 18; // 6 per row x 3 rows on desktop
@@ -212,20 +212,25 @@ export default function CreateStagingModal({
     if (Number.isFinite(staged)) parts.push(`Processed: ${staged}`);
     if (Number.isFinite(total)) parts.push(`Output images: ${total}`);
 
-    return parts.length > 0 ? parts.join(" • ") : null;
+    return parts.length > 0 ? parts.join(" - ") : null;
   }, [jobResult]);
 
   const stagingJobDone = jobStatus === "succeeded" || jobStatus === "failed";
 
-  const jobLineParts = [];
-  jobLineParts.push(`Staging job: ${jobStatus || "idle"}`);
-  if (jobStatus) {
-    jobLineParts.push(`${jobProgress}%`);
-  }
-  if (jobError) {
-    jobLineParts.push(String(jobError));
-  }
-  const jobLine = jobLineParts.join(" • ");
+  const jobStatusLabel =
+    jobStatus === "queued"
+      ? "Queued"
+      : jobStatus === "running"
+        ? "Creating staging"
+        : jobStatus === "succeeded"
+          ? "Completed"
+          : jobStatus === "failed"
+            ? "Could not complete"
+            : "Ready";
+
+  const jobLine = jobStatus
+    ? `${jobStatusLabel} - ${Number(jobProgress || 0)}%`
+    : jobStatusLabel;
 
   const retryJobMutation = useMutation({
     mutationFn: async (id) => {
@@ -454,7 +459,7 @@ export default function CreateStagingModal({
     uploadFurnitureMutation.isPending ||
     uploadingFurniture;
 
-  const creditLine = `${Number(creditsBalance || 0).toLocaleString()} balance • ${selectedCount || 0} photos • ${Number(perPhotoCredits || 0).toLocaleString()}/photo • ${Number(estimatedCredits || 0).toLocaleString()} total`;
+  const creditLine = `${Number(creditsBalance || 0).toLocaleString()} balance - ${selectedCount || 0} photos - ${Number(perPhotoCredits || 0).toLocaleString()}/photo - ${Number(estimatedCredits || 0).toLocaleString()} total`;
 
   const lastCreditCostLine = lastCreditCost
     ? `Last generation cost: ${Number(lastCreditCost).toLocaleString()}.`
@@ -492,12 +497,12 @@ export default function CreateStagingModal({
 
         <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 bg-white dark:bg-gray-900">
           <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 font-jetbrains-mono">
-            Photos to stage (choose up to {maxSelectable})
+            Select photos
           </div>
           <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
             {stagingType === "vacant"
-              ? "VACANT generates 2 variants per photo (Day/Night). Torch / indoor lights are disabled in this mode."
-              : "Each selected photo generates 4 variants (Day/Night × Lights On/Off). Cost is per photo."}
+              ? "Empty-room mode creates day and night versions."
+              : "Each selected photo creates day, night, lights-on, and lights-off versions."}
           </div>
           {selectedCount > 0 ? (
             <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
@@ -623,7 +628,7 @@ export default function CreateStagingModal({
 
           <div className="space-y-2">
             <div className="text-sm font-medium text-gray-700 dark:text-gray-300 font-jetbrains-mono">
-              Furniture library (optional)
+              Furniture references (optional)
             </div>
 
             {/* NEW: VACANT disable notice */}
@@ -634,9 +639,8 @@ export default function CreateStagingModal({
               </div>
             ) : (
               <div className="text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
-                Tip: Use close-up photos (the item should fill most of the
-                frame), plain background, good light. Avoid hands/people and
-                busy rooms.
+                Upload clear item photos. Use a plain background, good light,
+                and make the item fill most of the frame.
               </div>
             )}
 
@@ -648,7 +652,7 @@ export default function CreateStagingModal({
                 onChange={(e) => setAutoCleanFurniture(e.target.checked)}
                 disabled={disableActions || furnitureDisabled}
               />
-              Auto-clean uploads (remove background + center item)
+              Clean item photos automatically
             </label>
 
             <div className="flex items-center gap-2">
@@ -768,6 +772,12 @@ export default function CreateStagingModal({
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
             {jobLine}
+            {jobError ? (
+              <div className="mt-1 text-xs text-red-600 dark:text-red-400 font-jetbrains-mono">
+                We could not create this staging. Try again with a clearer
+                photo or fewer furniture references.
+              </div>
+            ) : null}
             {stagedSummary ? (
               <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
                 {stagedSummary}
@@ -825,7 +835,7 @@ export default function CreateStagingModal({
         </div>
 
         <div className="text-xs text-gray-500 dark:text-gray-500 font-jetbrains-mono">
-          Credits are consumed when you click Generate.
+          Credits are used when generation starts.
           {lastCreditCostLine ? <span>{` ${lastCreditCostLine}`}</span> : null}
         </div>
 

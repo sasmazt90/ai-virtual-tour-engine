@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileUp, FileText, Loader2 } from "lucide-react";
 import useUpload from "@/utils/useUpload";
@@ -6,9 +6,116 @@ import { ModalShell } from "./ModalShell";
 import { ClientCombobox } from "@/components/Calendar/ClientCombobox";
 
 const TEMPLATE_OPTIONS = [
-  { value: "sale_agreement", label: "Sale Agreement" },
-  { value: "rental_agreement", label: "Rental Agreement" },
+  { value: "agency_authorization", label: "Agency Authorization" },
+  { value: "buyer_representation", label: "Buyer Representation Agreement" },
+  { value: "handover_protocol", label: "Property Handover Protocol" },
+  { value: "offer_letter", label: "Property Offer Letter" },
+  { value: "rental_agreement", label: "Residential Lease Agreement" },
+  { value: "sale_agreement", label: "Residential Purchase Agreement" },
+  { value: "seller_listing_agreement", label: "Seller Listing Agreement" },
+  { value: "tenant_representation", label: "Tenant Representation Agreement" },
+  { value: "viewing_report", label: "Viewing and Inspection Report" },
 ];
+
+const FIELD_LABELS = {
+  OWNER_NAME: "Owner name",
+  OWNER_EMAIL: "Owner email",
+  OWNER_PHONE: "Owner phone",
+  OWNER_ADDRESS: "Owner address",
+  CUSTOMER_NAME: "Client name",
+  CUSTOMER_EMAIL: "Client email",
+  CUSTOMER_PHONE: "Client phone",
+  CUSTOMER_ADDRESS: "Client address",
+  PROPERTY_TITLE: "Property title",
+  PROPERTY_ADDRESS: "Property address",
+  PROPERTY_TYPE: "Property type",
+  PROPERTY_SIZE: "Size",
+  ROOM_COUNT: "Rooms",
+  FLOOR_INFO: "Floor",
+  TITLE_DEED_INFO: "Title deed",
+  SALE_PRICE: "Sale price",
+  RENT_PRICE: "Rent",
+  CURRENCY: "Currency",
+  DEPOSIT_AMOUNT: "Deposit",
+  RENT_START_DATE: "Start date",
+  RENT_DURATION: "Duration",
+  PAYMENT_METHOD: "Payment method",
+  AGENCY_NAME: "Agency",
+  AGENT_NAME: "Agent name",
+  AGENT_CONTACT: "Agent contact",
+  additionalTerms: "Special terms",
+};
+
+const COMMON_FIELDS = [
+  "PROPERTY_TITLE",
+  "PROPERTY_ADDRESS",
+  "PROPERTY_TYPE",
+  "PROPERTY_SIZE",
+  "ROOM_COUNT",
+  "FLOOR_INFO",
+  "OWNER_NAME",
+  "OWNER_EMAIL",
+  "OWNER_PHONE",
+  "CUSTOMER_NAME",
+  "CUSTOMER_EMAIL",
+  "CUSTOMER_PHONE",
+  "AGENCY_NAME",
+  "AGENT_NAME",
+  "AGENT_CONTACT",
+  "additionalTerms",
+];
+
+const TEMPLATE_FIELDS = {
+  sale_agreement: [
+    "SALE_PRICE",
+    "CURRENCY",
+    "PAYMENT_METHOD",
+    "TITLE_DEED_INFO",
+    ...COMMON_FIELDS,
+  ],
+  rental_agreement: [
+    "RENT_PRICE",
+    "CURRENCY",
+    "DEPOSIT_AMOUNT",
+    "RENT_START_DATE",
+    "RENT_DURATION",
+    ...COMMON_FIELDS,
+  ],
+  seller_listing_agreement: [
+    "SALE_PRICE",
+    "CURRENCY",
+    "PAYMENT_METHOD",
+    ...COMMON_FIELDS,
+  ],
+  buyer_representation: [
+    "SALE_PRICE",
+    "CURRENCY",
+    "PAYMENT_METHOD",
+    ...COMMON_FIELDS,
+  ],
+  tenant_representation: [
+    "RENT_PRICE",
+    "CURRENCY",
+    "DEPOSIT_AMOUNT",
+    "RENT_START_DATE",
+    ...COMMON_FIELDS,
+  ],
+  offer_letter: [
+    "SALE_PRICE",
+    "CURRENCY",
+    "PAYMENT_METHOD",
+    "TITLE_DEED_INFO",
+    ...COMMON_FIELDS,
+  ],
+  viewing_report: ["RENT_START_DATE", ...COMMON_FIELDS],
+  handover_protocol: [
+    "DEPOSIT_AMOUNT",
+    "RENT_START_DATE",
+    "TITLE_DEED_INFO",
+    ...COMMON_FIELDS,
+  ],
+  agency_authorization: ["RENT_START_DATE", ...COMMON_FIELDS],
+};
 
 function isPdfMime(mimeType) {
   if (!mimeType) return false;
@@ -16,23 +123,88 @@ function isPdfMime(mimeType) {
   return s === "application/pdf" || s.endsWith("/pdf");
 }
 
+function joinAddress(parts) {
+  return parts.filter(Boolean).join(", ");
+}
+
+function safeValue(value) {
+  if (value === null || value === undefined) return "";
+  return String(value);
+}
+
+function buildFloorInfo(property) {
+  const floor = safeValue(property?.floor_number);
+  const total = safeValue(property?.total_floors);
+  if (floor && total) return `${floor} / ${total}`;
+  return floor || total || "";
+}
+
+function buildContractFieldDefaults({ property, client }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const propertyAddress = joinAddress([
+    property?.address_line,
+    property?.city,
+    property?.postal_code,
+    property?.country,
+  ]);
+  const clientAddress = joinAddress([client?.city, client?.country]);
+  const ownerAddress = joinAddress([
+    property?.owner_city,
+    property?.owner_country,
+  ]);
+
+  return {
+    OWNER_NAME: safeValue(property?.owner_name),
+    OWNER_EMAIL: safeValue(property?.owner_email),
+    OWNER_PHONE: safeValue(property?.owner_phone),
+    OWNER_ADDRESS: ownerAddress,
+    CUSTOMER_NAME: safeValue(client?.full_name),
+    CUSTOMER_EMAIL: safeValue(client?.email),
+    CUSTOMER_PHONE: safeValue(client?.phone),
+    CUSTOMER_ADDRESS: clientAddress,
+    PROPERTY_TITLE: safeValue(property?.title),
+    PROPERTY_ADDRESS: propertyAddress,
+    PROPERTY_TYPE: safeValue(property?.housing_type),
+    PROPERTY_SIZE:
+      safeValue(property?.gross_area_sqm) || safeValue(property?.size_sqm),
+    ROOM_COUNT: safeValue(property?.rooms),
+    FLOOR_INFO: buildFloorInfo(property),
+    TITLE_DEED_INFO: safeValue(property?.title_deed_status),
+    SALE_PRICE: safeValue(property?.price),
+    RENT_PRICE: safeValue(property?.price),
+    CURRENCY: safeValue(property?.currency),
+    DEPOSIT_AMOUNT: safeValue(property?.deposit),
+    RENT_START_DATE: today,
+    RENT_DURATION: "",
+    PAYMENT_METHOD: "",
+    AGENCY_NAME: "",
+    AGENT_NAME: "",
+    AGENT_CONTACT: "",
+    additionalTerms: "",
+  };
+}
+
+function uniqueFields(templateType) {
+  const fields = TEMPLATE_FIELDS[templateType] || COMMON_FIELDS;
+  return Array.from(new Set(fields));
+}
+
 export default function AddContractModal({
   open,
   onClose,
+  property,
   propertyId,
   userId,
   defaultClientId,
 }) {
   const queryClient = useQueryClient();
 
-  const [mode, setMode] = useState("upload"); // 'upload' | 'generate'
+  const [mode, setMode] = useState("upload");
   const [error, setError] = useState(null);
-
   const [selectedFile, setSelectedFile] = useState(null);
   const [templateType, setTemplateType] = useState(TEMPLATE_OPTIONS[0]?.value);
-
-  // NEW: which client card should this contract be saved under?
   const [clientId, setClientId] = useState(defaultClientId || "");
+  const [fieldOverrides, setFieldOverrides] = useState({});
 
   const [upload, { loading: uploadLoading }] = useUpload();
 
@@ -40,13 +212,22 @@ export default function AddContractModal({
     queryKey: ["clients", userId],
     queryFn: async () => {
       const res = await fetch("/api/clients?type=all");
-      if (!res.ok) {
-        throw new Error("Could not load clients");
-      }
+      if (!res.ok) throw new Error("Could not load clients");
       return res.json();
     },
     enabled: !!open && !!userId,
   });
+
+  const selectedClient = useMemo(() => {
+    return clients.find((c) => String(c.id) === String(clientId)) || null;
+  }, [clientId, clients]);
+
+  useEffect(() => {
+    if (!open || mode !== "generate") return;
+    setFieldOverrides(
+      buildContractFieldDefaults({ property, client: selectedClient }),
+    );
+  }, [clientId, mode, open, property, selectedClient, templateType]);
 
   const resetState = useCallback(() => {
     setError(null);
@@ -54,6 +235,7 @@ export default function AddContractModal({
     setSelectedFile(null);
     setTemplateType(TEMPLATE_OPTIONS[0]?.value);
     setClientId(defaultClientId || "");
+    setFieldOverrides({});
   }, [defaultClientId]);
 
   const closeAndReset = useCallback(() => {
@@ -74,15 +256,11 @@ export default function AddContractModal({
       if (!propertyId) throw new Error("Missing property context.");
       if (!selectedFile) throw new Error("Please select a PDF file.");
 
-      const {
-        url,
-        mimeType,
-        error: upErr,
-      } = await upload({ file: selectedFile });
+      const { url, mimeType, error: upErr } = await upload({
+        file: selectedFile,
+      });
       if (upErr) throw new Error(upErr);
-      if (!isPdfMime(mimeType)) {
-        throw new Error("Please upload a PDF file.");
-      }
+      if (!isPdfMime(mimeType)) throw new Error("Please upload a PDF file.");
 
       const res = await fetch("/api/contracts/upload", {
         method: "POST",
@@ -125,6 +303,7 @@ export default function AddContractModal({
           propertyId,
           templateType,
           clientId: clientId || null,
+          fieldOverrides,
         }),
       });
 
@@ -150,18 +329,17 @@ export default function AddContractModal({
 
   const primaryLabel = useMemo(() => {
     if (mode === "upload") return "Upload PDF";
-    return "Generate PDF";
+    return "Create Contract";
   }, [mode]);
 
   const onPrimary = useCallback(() => {
-    if (mode === "upload") {
-      uploadMutation.mutate();
-    } else {
-      generateMutation.mutate();
-    }
+    if (mode === "upload") uploadMutation.mutate();
+    else generateMutation.mutate();
   }, [generateMutation, mode, uploadMutation]);
 
   if (!open) return null;
+
+  const visibleFields = uniqueFields(templateType);
 
   return (
     <ModalShell
@@ -169,22 +347,21 @@ export default function AddContractModal({
       onClose={isBusy ? () => {} : closeAndReset}
     >
       <div className="space-y-4 font-jetbrains-mono">
-        {/* NEW: attach to client */}
         <div className="space-y-2">
           <div className="text-sm text-gray-700 dark:text-gray-300">
-            Save under client (so it appears on the client card)
+            Client
           </div>
           <ClientCombobox
             value={clientId}
             onChange={setClientId}
             clients={clients}
             placeholder={
-              clientsLoading ? "Loading clients…" : "Select a client (optional)"
+              clientsLoading ? "Loading clients..." : "Select a client"
             }
           />
           <div className="text-xs text-gray-600 dark:text-gray-400">
-            If you pick a client, this contract will show under Directory → that
-            client.
+            The contract will be saved on this property and linked to the
+            selected client.
           </div>
         </div>
 
@@ -218,7 +395,7 @@ export default function AddContractModal({
                 : "bg-white dark:bg-[#262626] text-gray-900 dark:text-gray-100 border-gray-200 dark:border-gray-700"
             }`}
           >
-            Generate from template
+            Use template
           </button>
         </div>
 
@@ -237,42 +414,87 @@ export default function AddContractModal({
               }}
               className="block w-full text-sm text-gray-700 dark:text-gray-200"
             />
-            {selectedFile ? (
-              <div className="text-xs text-gray-600 dark:text-gray-400">
-                Selected: {selectedFile.name}
-              </div>
-            ) : (
-              <div className="text-xs text-gray-600 dark:text-gray-400">
-                PDF only.
-              </div>
-            )}
+            <div className="text-xs text-gray-600 dark:text-gray-400">
+              {selectedFile ? selectedFile.name : "PDF files only."}
+            </div>
           </div>
         ) : (
-          <div className="space-y-2">
-            <div className="text-sm text-gray-700 dark:text-gray-300">
-              Template
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <div className="text-sm text-gray-700 dark:text-gray-300">
+                Template
+              </div>
+              <select
+                value={templateType || ""}
+                disabled={isBusy}
+                onChange={(e) => setTemplateType(e.target.value)}
+                className="w-full px-4 py-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+              >
+                {TEMPLATE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <div className="text-xs text-gray-600 dark:text-gray-400">
+                Review and edit the details before creating the PDF.
+              </div>
             </div>
-            <select
-              value={templateType || ""}
-              disabled={isBusy}
-              onChange={(e) => setTemplateType(e.target.value)}
-              className="w-full px-4 py-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
-            >
-              {TEMPLATE_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-            <div className="text-xs text-gray-600 dark:text-gray-400">
-              PDF is generated automatically. No manual edits.
+
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-white dark:bg-gray-900">
+              <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                Contract details
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {visibleFields.map((key) => {
+                  const isLong = key === "additionalTerms";
+                  const value = fieldOverrides?.[key] || "";
+                  const label = FIELD_LABELS[key] || key;
+                  return (
+                    <label
+                      key={key}
+                      className={isLong ? "sm:col-span-2" : ""}
+                    >
+                      <span className="block text-xs text-gray-600 dark:text-gray-400 mb-1">
+                        {label}
+                      </span>
+                      {isLong ? (
+                        <textarea
+                          rows={4}
+                          value={value}
+                          disabled={isBusy}
+                          onChange={(e) =>
+                            setFieldOverrides((prev) => ({
+                              ...prev,
+                              [key]: e.target.value,
+                            }))
+                          }
+                          className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                        />
+                      ) : (
+                        <input
+                          value={value}
+                          disabled={isBusy}
+                          onChange={(e) =>
+                            setFieldOverrides((prev) => ({
+                              ...prev,
+                              [key]: e.target.value,
+                            }))
+                          }
+                          className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                        />
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
             </div>
           </div>
         )}
 
         {isBusy ? (
           <div className="text-sm text-gray-600 dark:text-gray-300">
-            {mode === "upload" ? "Uploading…" : "Generating…"}
+            {mode === "upload" ? "Uploading..." : "Creating contract..."}
           </div>
         ) : null}
 

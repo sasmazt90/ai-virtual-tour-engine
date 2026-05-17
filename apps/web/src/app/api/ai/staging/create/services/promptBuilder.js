@@ -52,7 +52,12 @@ export function buildPromptComponents({
       ? "\nFURNITURE REFERENCES (IMPORTANT — NO EXCEPTIONS):\n" +
         "- You MUST include EACH referenced furniture item clearly in the final staged room photo.\n" +
         "- Do NOT swap it for a different style/color; match the reference as closely as possible.\n" +
-        "- The item MUST be placed physically correctly (correct scale, on the floor, not floating).\n" +
+        "- Treat each reference as a real 3D object: infer the hidden/back/side surfaces when only one view is provided.\n" +
+        "- The item MUST be placed physically correctly (correct scale, on the floor or supported by furniture, never floating).\n" +
+        "- Match room perspective, contact shadows, occlusion, reflections, and floor/wall contact points.\n" +
+        "- The item must look naturally photographed in the room, not pasted on top as a flat cutout or collage element.\n" +
+        "- If the item is partially cropped in the reference, complete the missing side in the same style/material.\n" +
+        "- Place the item only where it belongs semantically: sofas/chairs on floors, art on walls, pillows on seating/beds, rugs flat on floors, lamps on tables/floors.\n" +
         "- You MUST preserve the original room architecture and camera angle.\n" +
         "- You MUST only change furniture/decor; do not remodel the room.\n" +
         (preferredItemsSummary

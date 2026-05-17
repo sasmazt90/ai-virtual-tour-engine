@@ -2,6 +2,7 @@ import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
 import {
   buildContractHtml,
+  getTemplateDef,
   getMissingFields,
   tryGenerateFillablePdfFromContractData,
   withPdfSystemState,
@@ -117,6 +118,10 @@ export async function POST(request) {
     const propertyId = safeString(body?.propertyId);
     const templateType = safeString(body?.templateType);
     const requestedClientId = safeString(body?.clientId);
+    const fieldOverrides =
+      body?.fieldOverrides && typeof body.fieldOverrides === "object"
+        ? body.fieldOverrides
+        : {};
 
     if (!propertyId || !templateType) {
       return Response.json(
@@ -197,8 +202,17 @@ export async function POST(request) {
     const currency = property.currency ? String(property.currency) : "";
 
     // ===== Fillable templates =====
-    const isTrTemplate =
-      templateType === "sale_agreement" || templateType === "rental_agreement";
+    const isRichTemplate = [
+      "agency_authorization",
+      "buyer_representation",
+      "handover_protocol",
+      "offer_letter",
+      "rental_agreement",
+      "sale_agreement",
+      "seller_listing_agreement",
+      "tenant_representation",
+      "viewing_report",
+    ].includes(templateType);
 
     // Keep legacy fields for backward compatibility (older UI may expect them).
     const baseLegacyFields = {
@@ -214,9 +228,11 @@ export async function POST(request) {
       company: agent?.company_name || "",
     };
 
-    const baseTrFields = isTrTemplate
+    const baseTrFields = isRichTemplate
       ? {
           OWNER_NAME: ownerClient.full_name || "",
+          OWNER_EMAIL: ownerClient.email || "",
+          OWNER_PHONE: ownerClient.phone || "",
           OWNER_ID: "",
           OWNER_ADDRESS: normalizeContractValue(
             buildClientAddress(ownerClient),
@@ -224,11 +240,14 @@ export async function POST(request) {
 
           // Buyer/Tenant side (saved as contract.client_id)
           CUSTOMER_NAME: customerClient.full_name || "",
+          CUSTOMER_EMAIL: customerClient.email || "",
+          CUSTOMER_PHONE: customerClient.phone || "",
           CUSTOMER_ID: "",
           CUSTOMER_ADDRESS: normalizeContractValue(
             buildClientAddress(customerClient),
           ),
 
+          PROPERTY_TITLE: property.title || "",
           PROPERTY_ADDRESS: normalizeContractValue(address),
           PROPERTY_TYPE: property.housing_type
             ? normalizeContractValue(String(property.housing_type))
@@ -270,11 +289,23 @@ export async function POST(request) {
         }
       : null;
 
-    const mergedBase = isTrTemplate
+    const cleanOverrides = Object.fromEntries(
+      Object.entries(fieldOverrides)
+        .filter(([key]) => typeof key === "string" && key.length <= 80)
+        .map(([key, value]) => [
+          key,
+          value === null || value === undefined ? "" : String(value).trim(),
+        ]),
+    );
+
+    const mergedBase = isRichTemplate
       ? { ...baseLegacyFields, ...baseTrFields }
       : baseLegacyFields;
 
-    const filledFields = withSignatureDefaults(mergedBase);
+    const filledFields = withSignatureDefaults({
+      ...mergedBase,
+      ...cleanOverrides,
+    });
 
     const missing = getMissingFields(templateType, filledFields);
     if (missing.length > 0) {
@@ -291,12 +322,7 @@ export async function POST(request) {
     const meta = {
       template_type: templateType,
       generated_at: new Date().toISOString(),
-      display_name:
-        templateType === "sale_agreement"
-          ? "Sale Agreement"
-          : templateType === "rental_agreement"
-            ? "Rental Agreement"
-            : null,
+      display_name: getTemplateDef(templateType).title,
     };
 
     // Insert first so we have an ID + version.
@@ -378,6 +404,13 @@ export async function POST(request) {
     return Response.json(contract, { status: 201 });
   } catch (error) {
     console.error("POST /api/contracts/generate error:", error);
-    return Response.json({ error: "Internal Server Error" }, { status: 500 });
+    return Response.json(
+      {
+        error:
+          error?.message ||
+          "We could not create this contract. Please review the details and try again.",
+      },
+      { status: 500 },
+    );
   }
 }

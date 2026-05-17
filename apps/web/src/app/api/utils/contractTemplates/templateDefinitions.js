@@ -10,6 +10,34 @@ export const TEMPLATE_DEFS = {
     title: "Residential Lease Agreement",
     required: [],
   },
+  buyer_representation: {
+    title: "Buyer Representation Agreement",
+    required: [],
+  },
+  seller_listing_agreement: {
+    title: "Seller Listing Agreement",
+    required: [],
+  },
+  tenant_representation: {
+    title: "Tenant Representation Agreement",
+    required: [],
+  },
+  offer_letter: {
+    title: "Property Offer Letter",
+    required: [],
+  },
+  viewing_report: {
+    title: "Viewing and Inspection Report",
+    required: [],
+  },
+  handover_protocol: {
+    title: "Property Handover Protocol",
+    required: [],
+  },
+  agency_authorization: {
+    title: "Agency Authorization",
+    required: [],
+  },
   // Legacy templates kept for backwards compatibility.
   purchase_agreement: {
     title: "Purchase Agreement (Legacy)",

@@ -2,6 +2,18 @@ import { upload } from "@/app/api/utils/upload";
 import { generateFillablePdfBytes } from "./pdfGenerator";
 import { buildContractHtml } from "./htmlTemplates";
 
+const HTML_TEMPLATE_TYPES = new Set([
+  "agency_authorization",
+  "buyer_representation",
+  "handover_protocol",
+  "offer_letter",
+  "rental_agreement",
+  "sale_agreement",
+  "seller_listing_agreement",
+  "tenant_representation",
+  "viewing_report",
+]);
+
 // NEW: Generate a fillable PDF (AcroForm) from structured contract data.
 export async function tryGenerateFillablePdfFromContractData({
   templateType,
@@ -17,7 +29,7 @@ export async function tryGenerateFillablePdfFromContractData({
     // Prefer HTML-to-PDF for our public templates (multi-page and closer to the provided templates).
     // Fall back to the in-house fillable PDF generator if the integration is unavailable.
     const t = String(templateType || "");
-    if (t === "sale_agreement" || t === "rental_agreement") {
+    if (HTML_TEMPLATE_TYPES.has(t)) {
       const html = buildContractHtml({
         templateType,
         property,

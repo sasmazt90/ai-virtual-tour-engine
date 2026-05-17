@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Download, Eye, Trash2, User } from "lucide-react";
+import { Download, Eye, Trash2 } from "lucide-react";
 import useUser from "@/utils/useUser";
 import AddContractModal from "./AddContractModal";
 
@@ -187,6 +187,7 @@ export function ContractsSection({ property, propertyId }) {
         open={addOpen}
         onClose={() => setAddOpen(false)}
         propertyId={propertyId}
+        property={property}
         userId={user?.id}
         defaultClientId={property?.owner_client_id || null}
       />

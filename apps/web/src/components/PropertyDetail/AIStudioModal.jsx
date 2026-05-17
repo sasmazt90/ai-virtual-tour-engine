@@ -5,13 +5,13 @@ import { useAIBusy } from "@/hooks/useAIBusy";
 import { StatusBanner } from "@/components/StatusBanner";
 
 const STAGING_TYPES = [
-  "default",
-  "vacant",
-  "minimalist",
-  "luxury",
-  "scandinavian",
   "classic",
+  "default",
+  "luxury",
+  "minimalist",
   "modern",
+  "scandinavian",
+  "vacant",
 ];
 
 // REQUIRED FIX: keep this note stable and rendered in exactly one place per modal open
@@ -123,14 +123,13 @@ export function AIStudioModal({
             Staging
           </h4>
 
-          {/* Preferred Items (Optional) */}
+          {/* Furniture references */}
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 bg-white dark:bg-gray-900">
             <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 font-jetbrains-mono">
-              Preferred Items (Optional)
+              Furniture references (optional)
             </div>
             <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
-              Upload images of furniture or items you want to prioritize in the
-              staging.
+              Add item photos only when you want them included in the room.
             </div>
 
             <div className="mt-3">
@@ -143,7 +142,7 @@ export function AIStudioModal({
               />
               {preferredItemsUploading ? (
                 <div className="mt-2 text-xs text-gray-500 dark:text-gray-500 font-jetbrains-mono">
-                  Uploading preferred items…
+                  Uploading preferred items...
                 </div>
               ) : null}
 
@@ -185,7 +184,7 @@ export function AIStudioModal({
                           className="absolute top-1 right-1 inline-flex items-center justify-center h-6 w-6 rounded-full bg-white/90 dark:bg-gray-800/90 border border-gray-200 dark:border-gray-700 text-xs text-gray-800 dark:text-gray-100"
                           aria-label="Remove"
                         >
-                          ×
+                          X
                         </button>
                       </div>
                     );
@@ -225,7 +224,7 @@ export function AIStudioModal({
 
             <div className="space-y-2">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 font-jetbrains-mono">
-                Custom Assets
+                Furniture references
               </label>
               <input
                 type="file"
@@ -243,7 +242,7 @@ export function AIStudioModal({
                 {uploading ? (
                   <Loader2 size={16} className="animate-spin" />
                 ) : null}
-                Upload assets
+                Upload items
               </button>
               {customAssets.length > 0 ? (
                 <div className="mt-3 grid grid-cols-3 gap-2">
@@ -262,7 +261,7 @@ export function AIStudioModal({
                 </div>
               ) : (
                 <div className="text-xs text-gray-500 dark:text-gray-500 font-jetbrains-mono">
-                  No custom assets yet.
+                  No furniture references yet.
                 </div>
               )}
             </div>
@@ -270,9 +269,16 @@ export function AIStudioModal({
 
           <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
             <div className="text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
-              Staging job: {jobStatus || "idle"}
-              {jobStatus ? ` • ${jobProgress}%` : ""}
-              {jobError ? ` • ${jobError}` : ""}
+              {jobStatus
+                ? `${jobStatus
+                    .replaceAll("_", " ")
+                    .replace(/^\w/, (c) => c.toUpperCase())} - ${Number(
+                    jobProgress || 0,
+                  )}%`
+                : "Ready when you are."}
+              {jobError
+                ? " - We could not create this staging. Try again with a clearer photo or fewer furniture references."
+                : ""}
             </div>
             <div className="flex items-center gap-2">
               {jobStatus === "failed" && stagingJobId ? (

@@ -410,6 +410,175 @@ function buildPurchaseAgreement10PagesHtml({
   );
 }
 
+const WORKFLOW_TEMPLATE_TYPES = new Set([
+  "agency_authorization",
+  "buyer_representation",
+  "handover_protocol",
+  "offer_letter",
+  "seller_listing_agreement",
+  "tenant_representation",
+  "viewing_report",
+]);
+
+function buildWorkflowTemplateSections(templateType, fields) {
+  const notes = resolveAny(fields, ["additionalTerms"], "");
+  const commonTerms = {
+    agency_authorization: [
+      "The client authorizes the agency and agent named in this document to act for the limited purpose described below.",
+      "The authorization may be used for marketing, buyer or tenant communication, showing coordination, offer handling, and document preparation.",
+      "The client may add limits, exclusions, or approval requirements in the special terms section.",
+    ],
+    buyer_representation: [
+      "The buyer appoints the agent to assist with property search, viewing coordination, offer preparation, negotiation support, and transaction follow-up.",
+      "The agent will present suitable properties and keep the buyer informed about known material information.",
+      "Any exclusivity, commission, or termination terms should be written in the special terms section.",
+    ],
+    handover_protocol: [
+      "This handover record documents the condition and access items transferred for the property.",
+      "Keys, remotes, access cards, meters, visible defects, furniture, and agreed inventory should be recorded before signature.",
+      "Photos, inventory lists, and inspection notes may be attached to this document.",
+    ],
+    offer_letter: [
+      "The client submits this non-binding offer for the property subject to contract, due diligence, financing, and final written agreement.",
+      "The offer amount, payment method, closing timing, and conditions should be reviewed by the parties.",
+      "Acceptance should be confirmed in a separate signed agreement where required by law.",
+    ],
+    seller_listing_agreement: [
+      "The owner appoints the agent to market the property, coordinate viewings, communicate with prospective buyers, and support offer handling.",
+      "Marketing price, commission, listing duration, exclusivity, advertising channels, and access rules should be reviewed before signature.",
+      "The owner confirms that listing information provided to the agent is accurate to the best of their knowledge.",
+    ],
+    tenant_representation: [
+      "The tenant appoints the agent to assist with rental search, viewings, offer preparation, lease coordination, and communication with landlords.",
+      "The agent will support the tenant with available property information and process coordination.",
+      "Any commission, exclusivity, or termination terms should be recorded in the special terms section.",
+    ],
+    viewing_report: [
+      "This report records the client viewing and inspection notes for the property.",
+      "The agent may use it to document interest level, questions, visible issues, follow-up tasks, and next steps.",
+      "This report is not a technical survey unless separately stated.",
+    ],
+  };
+
+  const terms = commonTerms[templateType] || [
+    "This document records the agreed property workflow details.",
+    "All parties should review the information before signing.",
+    "Special terms can be added below.",
+  ];
+
+  return `
+    <h2>Purpose</h2>
+    ${terms.map((term, idx) => `<p>${idx + 1}) ${escapeHtml(term)}</p>`).join("")}
+
+    <div class="field">
+      <div class="label">Special terms</div>
+      <div class="value">${escapeHtml(notes || "").replaceAll("\n", "<br/>")}</div>
+    </div>
+  `;
+}
+
+function buildWorkflowContractHtml({
+  templateType,
+  fields,
+  property,
+  client,
+  agent,
+  contractMeta,
+}) {
+  const title = getTemplateDef(templateType).title;
+  const propertyTitle = resolveAny(fields, ["PROPERTY_TITLE"], property?.title || "");
+  const propertyAddress = resolveAny(
+    fields,
+    ["PROPERTY_ADDRESS"],
+    buildPropertyAddress({ property, fields }),
+  );
+  const ownerName = resolveAny(fields, ["OWNER_NAME"], "");
+  const clientName = resolveAny(fields, ["CUSTOMER_NAME"], client?.full_name || "");
+  const agentName = resolveAny(fields, ["AGENT_NAME", "agentName"], agent?.agent_name || "");
+  const agencyName = resolveAny(fields, ["AGENCY_NAME", "company"], agent?.company_name || "");
+  const effectiveDate = resolveAny(
+    fields,
+    ["RENT_START_DATE", "effectiveDate"],
+    new Date().toISOString().slice(0, 10),
+  );
+  const price = resolveAny(fields, ["SALE_PRICE", "RENT_PRICE", "price"], "");
+  const currency = resolveAny(fields, ["CURRENCY"], property?.currency ? String(property.currency) : "");
+  const moneyText = [price, currency].filter(Boolean).join(" ").trim();
+
+  const resolvedAgent = {
+    agent_name: agentName,
+    company_name: agencyName,
+    company_logo_url: agent?.company_logo_url ? String(agent.company_logo_url) : "",
+  };
+
+  return `
+    <div class="page">
+      ${headerBlock({ agent: resolvedAgent })}
+      <h1>${escapeHtml(title)}</h1>
+
+      <div class="grid2">
+        <div class="field">
+          <div class="label">Date</div>
+          <div class="value">${escapeHtml(effectiveDate || "Not specified")}</div>
+        </div>
+        <div class="field">
+          <div class="label">Agent / agency</div>
+          <div class="value">${escapeHtml([agentName, agencyName].filter(Boolean).join(" - ") || "Not specified")}</div>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <div class="label">Owner</div>
+          <div class="value">${escapeHtml(ownerName || "Not specified")}</div>
+        </div>
+        <div class="field">
+          <div class="label">Client</div>
+          <div class="value">${escapeHtml(clientName || "Not specified")}</div>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="label">Property</div>
+        <div class="value">${escapeHtml(propertyTitle || "Not specified")}<br/>${escapeHtml(propertyAddress || "Not specified")}</div>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <div class="label">Property type</div>
+          <div class="value">${escapeHtml(resolveAny(fields, ["PROPERTY_TYPE"], "Not specified"))}</div>
+        </div>
+        <div class="field">
+          <div class="label">Price / rent</div>
+          <div class="value">${escapeHtml(moneyText || "Not specified")}</div>
+        </div>
+      </div>
+
+      ${buildWorkflowTemplateSections(templateType, fields)}
+
+      <div class="sigrow">
+        <div>
+          <div class="sigline"></div>
+          <div class="siglabel">Client signature</div>
+        </div>
+        <div>
+          <div class="sigline"></div>
+          <div class="siglabel">Agent signature</div>
+        </div>
+      </div>
+
+      ${footerBlock({
+        agent: resolvedAgent,
+        contractMeta: {
+          generatedAt: contractMeta?.generatedAt || new Date().toISOString(),
+          version:
+            typeof contractMeta?.version === "number" ? contractMeta.version : 1,
+        },
+      })}
+    </div>
+  `;
+}
+
 // ====== Legacy templates (kept) ======
 function buildSaleAgreementBody({
   effectiveDate,
@@ -624,6 +793,21 @@ export function buildContractHtml({
 </head>
 <body>
   ${buildPurchaseAgreement10PagesHtml({ fields, property, client, agent, contractMeta })}
+</body>
+</html>`;
+  }
+
+  if (WORKFLOW_TEMPLATE_TYPES.has(String(templateType))) {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeHtml(title)}</title>
+  ${baseDocumentStyle()}
+</head>
+<body>
+  ${buildWorkflowContractHtml({ templateType, fields, property, client, agent, contractMeta })}
 </body>
 </html>`;
   }
