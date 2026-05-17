@@ -1,6 +1,5 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import Fake360Viewer from "@/components/Fake360Viewer";
 import Splat3DViewer from "@/components/Splat3DViewer";
 import { StatusBanner } from "@/components/StatusBanner";
 
@@ -89,7 +88,9 @@ export default function SharedTourPage(props) {
           tour?.tour_payload?.type === "splat3d" ? (
             <Splat3DViewer tourPayload={tour.tour_payload} height={620} />
           ) : (
-            <Fake360Viewer tourPayload={tour.tour_payload} />
+            <StatusBanner variant="info" title="Not available">
+              This virtual tour format is no longer supported.
+            </StatusBanner>
           )}
         </div>
       </div>

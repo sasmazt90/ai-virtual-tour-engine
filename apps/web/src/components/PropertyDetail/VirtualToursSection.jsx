@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import Fake360Viewer from "@/components/Fake360Viewer";
 import Splat3DViewer from "@/components/Splat3DViewer";
 import { CreateSplatTourModal } from "./CreateSplatTourModal";
 import { CreateVideo3DTourModal } from "./CreateVideo3DTourModal";
@@ -216,7 +215,10 @@ export function VirtualToursSection({ property, propertyId }) {
           viewingTour?.tour_payload?.type === "splat3d" ? (
             <Splat3DViewer tourPayload={viewingTour.tour_payload} height={560} />
           ) : (
-            <Fake360Viewer tourPayload={viewingTour.tour_payload} height={480} />
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-950 p-6 text-sm text-gray-200 font-jetbrains-mono">
+              This virtual tour format is no longer supported. Create a new 3D
+              tour from an iPhone video or upload a 3D scan file.
+            </div>
           )}
         </ModalShell>
       ) : null}
