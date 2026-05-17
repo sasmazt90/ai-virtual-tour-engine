@@ -17,9 +17,10 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "uploads")
 OPEN_SPLAT_BIN = os.getenv("OPEN_SPLAT_BIN", "opensplat")
 WORKER_POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "10"))
-FRAME_RATE = float(os.getenv("FRAME_RATE", "2"))
+FRAME_RATE = float(os.getenv("FRAME_RATE", "4"))
 MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1600"))
-SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "2000"))
+SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "6000"))
+SPLAT_DENSIFY_GRAD_THRESH = os.getenv("SPLAT_DENSIFY_GRAD_THRESH", "0.00015")
 
 
 def run(cmd, cwd=None):
@@ -150,14 +151,22 @@ def run_colmap(images_dir, work_dir):
         "1",
         "--SiftExtraction.use_gpu",
         "0",
+        "--SiftExtraction.max_num_features",
+        "8192",
+        "--SiftExtraction.peak_threshold",
+        "0.004",
+        "--SiftExtraction.edge_threshold",
+        "10",
     ])
     run([
         "colmap",
-        "exhaustive_matcher",
+        "sequential_matcher",
         "--database_path",
         str(db_path),
         "--SiftMatching.use_gpu",
         "0",
+        "--SequentialMatching.overlap",
+        "20",
     ])
     run([
         "colmap",
@@ -168,22 +177,42 @@ def run_colmap(images_dir, work_dir):
         str(images_dir),
         "--output_path",
         str(sparse_dir),
+        "--Mapper.min_num_matches",
+        "12",
+        "--Mapper.init_min_num_inliers",
+        "50",
     ])
 
-    model_dir = sparse_dir / "0"
-    if not model_dir.exists():
+    model_dirs = [path for path in sparse_dir.iterdir() if path.is_dir()]
+    if not model_dirs:
         raise RuntimeError("COLMAP did not produce a sparse model.")
-    return model_dir
+
+    # COLMAP can split a walkthrough into multiple sparse reconstructions.
+    # OpenSplat quality depends heavily on choosing the richest reconstruction,
+    # and COLMAP does not guarantee that it is sparse/0.
+    def model_weight(path):
+        points = path / "points3D.bin"
+        images = path / "images.bin"
+        return (
+            points.stat().st_size if points.exists() else 0,
+            images.stat().st_size if images.exists() else 0,
+        )
+
+    return max(model_dirs, key=model_weight)
 
 
-def run_opensplat(project_dir, output_path):
+def run_opensplat(model_dir, images_dir, output_path):
     run([
         OPEN_SPLAT_BIN,
-        str(project_dir),
+        str(model_dir),
+        "--colmap-image-path",
+        str(images_dir),
         "-o",
         str(output_path),
         "-n",
         str(SPLAT_ITERATIONS),
+        "--densify-grad-thresh",
+        str(SPLAT_DENSIFY_GRAD_THRESH),
     ])
     if not output_path.exists():
         raise RuntimeError("OpenSplat did not produce an output file.")
@@ -268,10 +297,10 @@ def process_job(conn, job):
         extract_frames(video_path, images_dir)
 
         update_job(conn, job["id"], progress=35)
-        run_colmap(images_dir, work_dir)
+        model_dir = run_colmap(images_dir, work_dir)
 
         update_job(conn, job["id"], progress=70)
-        run_opensplat(work_dir, output_path)
+        run_opensplat(model_dir, images_dir, output_path)
 
         update_job(conn, job["id"], progress=88)
         file_url = upload_result(output_path)

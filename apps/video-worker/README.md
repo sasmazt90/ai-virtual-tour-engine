@@ -22,9 +22,10 @@ SUPABASE_SERVICE_ROLE_KEY=...
 SUPABASE_STORAGE_BUCKET=uploads
 OPEN_SPLAT_BIN=/usr/local/bin/opensplat
 WORKER_POLL_SECONDS=10
-FRAME_RATE=2
+FRAME_RATE=4
 MAX_IMAGE_SIZE=1600
-SPLAT_ITERATIONS=2000
+SPLAT_ITERATIONS=6000
+SPLAT_DENSIFY_GRAD_THRESH=0.00015
 ```
 
 `OPEN_SPLAT_BIN` must point to an OpenSplat binary available in the container or host.
@@ -59,9 +60,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/sasmazt90/ai-virtual-tour-en
 4. Watch the logs until the job status becomes `succeeded` or `failed`.
 5. Stop the GPU pod after processing. This is what keeps the cost low.
 
-OpenSplat expects a COLMAP-style project folder. The worker extracts frames into `images/`,
-creates `sparse/0` with COLMAP, then runs:
+OpenSplat expects COLMAP camera poses and the extracted images. The worker extracts
+frames into `images/`, lets COLMAP create one or more `sparse/*` models, chooses the
+model with the most reconstructed points, then runs:
 
 ```bash
-opensplat /work/project -o tour.ply -n 2000
+opensplat /work/project/sparse/1 --colmap-image-path /work/project/images -o tour.ply -n 6000
 ```
