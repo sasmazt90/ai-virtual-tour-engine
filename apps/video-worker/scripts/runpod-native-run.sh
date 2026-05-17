@@ -36,7 +36,7 @@ fi
 
 echo "Worker repository commit: $(git -C "$REPO_DIR" rev-parse --short HEAD)"
 
-pip3 install --no-cache-dir -r "$REPO_DIR/apps/video-worker/requirements.txt"
+pip3 install --break-system-packages --no-cache-dir -r "$REPO_DIR/apps/video-worker/requirements.txt"
 
 if [ ! -x "$OPEN_SPLAT_DIR/build/opensplat" ]; then
   if [ ! -d "$OPEN_SPLAT_DIR/.git" ]; then
