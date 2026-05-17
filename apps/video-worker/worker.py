@@ -119,7 +119,16 @@ def download_video(url, out_path):
 def extract_frames(video_path, images_dir):
     images_dir.mkdir(parents=True, exist_ok=True)
     vf = f"fps={FRAME_RATE},scale='min({MAX_IMAGE_SIZE},iw)':-2"
-    run(["ffmpeg", "-y", "-i", str(video_path), "-vf", vf, str(images_dir / "frame_%06d.jpg")])
+    run([
+        "ffmpeg",
+        "-nostdin",
+        "-y",
+        "-i",
+        str(video_path),
+        "-vf",
+        vf,
+        str(images_dir / "frame_%06d.jpg"),
+    ])
 
 
 def run_colmap(images_dir, work_dir):

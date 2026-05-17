@@ -30,8 +30,11 @@ apt-get install -y --no-install-recommends \
 if [ ! -d "$REPO_DIR/.git" ]; then
   git clone "$REPO_URL" "$REPO_DIR"
 else
-  git -C "$REPO_DIR" pull --ff-only
+  git -C "$REPO_DIR" fetch origin main
+  git -C "$REPO_DIR" reset --hard origin/main
 fi
+
+echo "Worker repository commit: $(git -C "$REPO_DIR" rev-parse --short HEAD)"
 
 pip3 install --no-cache-dir -r "$REPO_DIR/apps/video-worker/requirements.txt"
 
@@ -60,5 +63,6 @@ source "$ENV_FILE"
 set +a
 
 export QT_QPA_PLATFORM=offscreen
+unset DISPLAY
 export OPEN_SPLAT_BIN="$OPEN_SPLAT_DIR/build/opensplat"
 python3 "$REPO_DIR/apps/video-worker/worker.py"
