@@ -111,6 +111,11 @@ function statusDescription({ status, uploadLoading }) {
   return "Processing is in progress.";
 }
 
+function userSafeJobError(rawError) {
+  if (!rawError) return "";
+  return "The video could not be converted into a 3D tour. Please try a slower, well-lit walkthrough video.";
+}
+
 export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
   const queryClient = useQueryClient();
   const [file, setFile] = useState(null);
@@ -345,7 +350,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
 
             {jobData?.error ? (
               <div className="mt-2 text-sm text-red-600 dark:text-red-400 font-jetbrains-mono">
-                {jobData.error}
+                {userSafeJobError(jobData.error)}
               </div>
             ) : null}
             {!done && queuedForMs > 2 * 60 * 1000 ? (

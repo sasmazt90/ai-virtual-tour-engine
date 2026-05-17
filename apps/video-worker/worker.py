@@ -1,6 +1,5 @@
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 import time
@@ -24,23 +23,11 @@ SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "2000"))
 
 
 def run(cmd, cwd=None):
-    use_xvfb = bool(cmd and cmd[0] == "colmap" and shutil.which("xvfb-run"))
-
-    if use_xvfb:
-        cmd = [
-            "xvfb-run",
-            "-a",
-            "-s",
-            "-screen 0 1280x1024x24",
-            *cmd,
-        ]
-
     print("$", " ".join(str(c) for c in cmd), flush=True)
     env = os.environ.copy()
-    if use_xvfb:
-        env["QT_QPA_PLATFORM"] = "xcb"
-    else:
+    if cmd and cmd[0] == "colmap":
         env["QT_QPA_PLATFORM"] = "offscreen"
+        env.setdefault("DISPLAY", "")
     subprocess.run(cmd, cwd=cwd, env=env, check=True)
 
 
