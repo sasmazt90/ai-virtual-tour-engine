@@ -29,34 +29,50 @@ async function fitCameraToScene(viewer) {
 
   const THREE = await import("three");
   const sample = new THREE.Vector3();
-  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
-  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
-  const step = Math.max(1, Math.floor(count / 2500));
+  const xs = [];
+  const ys = [];
+  const zs = [];
+  const step = Math.max(1, Math.floor(count / 6000));
 
   for (let i = 0; i < count; i += step) {
     splatMesh.getSplatCenter(i, sample, true);
-    min.min(sample);
-    max.max(sample);
+    if (
+      Number.isFinite(sample.x) &&
+      Number.isFinite(sample.y) &&
+      Number.isFinite(sample.z)
+    ) {
+      xs.push(sample.x);
+      ys.push(sample.y);
+      zs.push(sample.z);
+    }
   }
 
-  if (
-    !Number.isFinite(min.x) ||
-    !Number.isFinite(min.y) ||
-    !Number.isFinite(min.z) ||
-    !Number.isFinite(max.x) ||
-    !Number.isFinite(max.y) ||
-    !Number.isFinite(max.z)
-  ) {
+  if (xs.length < 10) {
     return count;
   }
 
+  const pick = (values, q) => {
+    values.sort((a, b) => a - b);
+    return values[Math.max(0, Math.min(values.length - 1, Math.floor(values.length * q)))];
+  };
+
+  // Gaussian splat exports often contain a few distant outliers. Fitting the
+  // camera to the full min/max bounds can place the room far away or inside a
+  // blurred outlier cloud, so fit to the central 90% of sampled points.
+  const min = new THREE.Vector3(pick(xs, 0.05), pick(ys, 0.05), pick(zs, 0.05));
+  const max = new THREE.Vector3(pick(xs, 0.95), pick(ys, 0.95), pick(zs, 0.95));
   const box = new THREE.Box3(min, max);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
-  const radius = Math.max(size.length() * 0.55, 2);
+  const maxDim = Math.max(size.x, size.y, size.z, 1);
+  const fov = viewer.camera?.fov ? (viewer.camera.fov * Math.PI) / 180 : Math.PI / 4;
+  const distance = Math.max(maxDim / (2 * Math.tan(fov / 2)), 2) * 1.65;
+  const viewDirection = new THREE.Vector3(0.35, -1, 0.35).normalize();
 
   if (viewer.camera) {
-    viewer.camera.position.set(center.x, center.y - radius * 2.2, center.z + radius * 0.7);
+    viewer.camera.near = Math.max(0.01, distance / 500);
+    viewer.camera.far = Math.max(1000, distance * 100);
+    viewer.camera.position.copy(center.clone().add(viewDirection.multiplyScalar(distance)));
     viewer.camera.lookAt(center);
     viewer.camera.updateProjectionMatrix?.();
   }
@@ -105,8 +121,8 @@ export default function Splat3DViewer({ tourPayload, height }) {
 
         const viewer = new GaussianSplats3D.Viewer({
           rootElement: root,
-          cameraUp: safeVector(camera.up, [0, -1, -0.6]),
-          initialCameraPosition: safeVector(camera.position, [-1, -4, 6]),
+          cameraUp: safeVector(camera.up, [0, -1, 0]),
+          initialCameraPosition: safeVector(camera.position, [0, -4, 2]),
           initialCameraLookAt: safeVector(camera.lookAt, [0, 0, 0]),
           sharedMemoryForWorkers: false,
           gpuAcceleratedSort: false,

@@ -26,6 +26,10 @@ FRAME_RATE=4
 MAX_IMAGE_SIZE=1600
 SPLAT_ITERATIONS=6000
 SPLAT_DENSIFY_GRAD_THRESH=0.00015
+MIN_REGISTERED_IMAGES=80
+MIN_REGISTERED_IMAGE_RATIO=0.35
+MIN_SPARSE_POINTS=8000
+MIN_SPLAT_COUNT=25000
 ```
 
 `OPEN_SPLAT_BIN` must point to an OpenSplat binary available in the container or host.
@@ -67,3 +71,7 @@ model with the most reconstructed points, then runs:
 ```bash
 opensplat /work/project/sparse/1 --colmap-image-path /work/project/images -o tour.ply -n 6000
 ```
+
+After reconstruction, the worker validates the output before saving it. A job fails
+instead of publishing a broken tour if too few video frames align, if the sparse
+scene is weak, or if the exported splat has too few renderable points.

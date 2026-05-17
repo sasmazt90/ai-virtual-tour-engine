@@ -21,6 +21,14 @@ FRAME_RATE = float(os.getenv("FRAME_RATE", "4"))
 MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1600"))
 SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "6000"))
 SPLAT_DENSIFY_GRAD_THRESH = os.getenv("SPLAT_DENSIFY_GRAD_THRESH", "0.00015")
+MIN_REGISTERED_IMAGES = int(os.getenv("MIN_REGISTERED_IMAGES", "80"))
+MIN_REGISTERED_IMAGE_RATIO = float(os.getenv("MIN_REGISTERED_IMAGE_RATIO", "0.35"))
+MIN_SPARSE_POINTS = int(os.getenv("MIN_SPARSE_POINTS", "8000"))
+MIN_SPLAT_COUNT = int(os.getenv("MIN_SPLAT_COUNT", "25000"))
+
+
+class ReconstructionQualityError(RuntimeError):
+    pass
 
 
 def run(cmd, cwd=None):
@@ -122,7 +130,7 @@ def download_video(url, out_path):
 
 def extract_frames(video_path, images_dir):
     images_dir.mkdir(parents=True, exist_ok=True)
-    vf = f"fps={FRAME_RATE},scale='min({MAX_IMAGE_SIZE},iw)':-2"
+    vf = f"fps={FRAME_RATE},scale='min({MAX_IMAGE_SIZE},iw)':-2,setsar=1"
     run([
         "ffmpeg",
         "-nostdin",
@@ -131,6 +139,8 @@ def extract_frames(video_path, images_dir):
         str(video_path),
         "-vf",
         vf,
+        "-q:v",
+        "2",
         str(images_dir / "frame_%06d.jpg"),
     ])
 
@@ -149,6 +159,8 @@ def run_colmap(images_dir, work_dir):
         str(images_dir),
         "--ImageReader.single_camera",
         "1",
+        "--ImageReader.camera_model",
+        "SIMPLE_RADIAL",
         "--SiftExtraction.use_gpu",
         "0",
         "--SiftExtraction.max_num_features",
@@ -201,6 +213,92 @@ def run_colmap(images_dir, work_dir):
     return max(model_dirs, key=model_weight)
 
 
+def count_extracted_frames(images_dir):
+    return sum(1 for _ in images_dir.glob("*.jpg"))
+
+
+def analyze_colmap_model(model_dir, work_dir):
+    text_dir = work_dir / "colmap_text"
+    text_dir.mkdir(parents=True, exist_ok=True)
+    run([
+        "colmap",
+        "model_converter",
+        "--input_path",
+        str(model_dir),
+        "--output_path",
+        str(text_dir),
+        "--output_type",
+        "TXT",
+    ])
+
+    images_txt = text_dir / "images.txt"
+    points_txt = text_dir / "points3D.txt"
+    registered_images = 0
+    sparse_points = 0
+
+    if images_txt.exists():
+        for line in images_txt.read_text(errors="ignore").splitlines():
+            if line.startswith("#"):
+                continue
+            if ".jpg" in line.lower() or ".jpeg" in line.lower() or ".png" in line.lower():
+                registered_images += 1
+
+    if points_txt.exists():
+        for line in points_txt.read_text(errors="ignore").splitlines():
+            if line.strip() and not line.startswith("#"):
+                sparse_points += 1
+
+    return {
+        "registeredImages": registered_images,
+        "sparsePoints": sparse_points,
+    }
+
+
+def read_ply_vertex_count(path):
+    with open(path, "rb") as f:
+        for raw in f:
+            line = raw.decode("utf-8", errors="ignore").strip()
+            if line.startswith("element vertex "):
+                try:
+                    return int(line.split()[-1])
+                except ValueError:
+                    return 0
+            if line == "end_header":
+                break
+    return 0
+
+
+def assert_reconstruction_quality(frame_count, stats, splat_count):
+    registered_images = int(stats.get("registeredImages") or 0)
+    sparse_points = int(stats.get("sparsePoints") or 0)
+    registered_ratio = registered_images / frame_count if frame_count else 0
+
+    failures = []
+    if registered_images < MIN_REGISTERED_IMAGES:
+        failures.append(f"only {registered_images} usable frames")
+    if registered_ratio < MIN_REGISTERED_IMAGE_RATIO:
+        failures.append(f"only {registered_ratio:.0%} of frames aligned")
+    if sparse_points < MIN_SPARSE_POINTS:
+        failures.append(f"only {sparse_points} stable scene points")
+    if splat_count < MIN_SPLAT_COUNT:
+        failures.append(f"only {splat_count} render points")
+
+    if failures:
+        raise ReconstructionQualityError(
+            "This video does not contain enough stable visual overlap for a reliable 3D tour. "
+            "Please record a slower, brighter walkthrough with more overlap between views. "
+            f"Quality checks failed: {', '.join(failures)}."
+        )
+
+    return {
+        "frameCount": frame_count,
+        "registeredImages": registered_images,
+        "registeredImageRatio": registered_ratio,
+        "sparsePoints": sparse_points,
+        "splatCount": splat_count,
+    }
+
+
 def run_opensplat(model_dir, images_dir, output_path):
     run([
         OPEN_SPLAT_BIN,
@@ -230,7 +328,7 @@ def upload_result(path):
     return supabase.storage.from_(SUPABASE_STORAGE_BUCKET).get_public_url(object_path)
 
 
-def save_virtual_tour(conn, job, file_url, output_format):
+def save_virtual_tour(conn, job, file_url, output_format, quality):
     payload = {
         "type": "splat3d",
         "fileUrl": file_url,
@@ -238,10 +336,9 @@ def save_virtual_tour(conn, job, file_url, output_format):
         "sourceType": "original",
         "generatedFrom": "iphone_video",
         "jobId": str(job["id"]),
-        "camera": {
-            "up": [0, -1, -0.6],
-            "position": [-1, -4, 6],
-            "lookAt": [0, 0, 0],
+        "quality": {
+            **quality,
+            "profile": "validated",
         },
     }
     with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
@@ -295,25 +392,29 @@ def process_job(conn, job):
 
         update_job(conn, job["id"], progress=15)
         extract_frames(video_path, images_dir)
+        frame_count = count_extracted_frames(images_dir)
 
         update_job(conn, job["id"], progress=35)
         model_dir = run_colmap(images_dir, work_dir)
+        model_stats = analyze_colmap_model(model_dir, work_dir)
 
         update_job(conn, job["id"], progress=70)
         run_opensplat(model_dir, images_dir, output_path)
+        splat_count = read_ply_vertex_count(output_path)
+        quality = assert_reconstruction_quality(frame_count, model_stats, splat_count)
 
         update_job(conn, job["id"], progress=88)
         file_url = upload_result(output_path)
 
         update_job(conn, job["id"], progress=95)
-        tour_id = save_virtual_tour(conn, job, file_url, "ply")
+        tour_id = save_virtual_tour(conn, job, file_url, "ply", quality)
 
         update_job(
             conn,
             job["id"],
             status="succeeded",
             progress=100,
-            result={"tourId": str(tour_id), "fileUrl": file_url},
+            result={"tourId": str(tour_id), "fileUrl": file_url, "quality": quality},
         )
 
 

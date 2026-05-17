@@ -290,6 +290,21 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
           </div>
         </div>
 
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+          <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 font-jetbrains-mono">
+            Instructions
+          </div>
+          <ul className="mt-2 space-y-2 text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono list-disc pl-5">
+            <li>Record one room or one connected area per video.</li>
+            <li>Use landscape mode, preferably 4K or 1080p, with good lighting.</li>
+            <li>Walk slowly and keep the phone steady at chest height.</li>
+            <li>Move in a smooth loop and capture each wall or furniture area from more than one angle.</li>
+            <li>Avoid fast turns, blurry motion, dark corners, mirrors, windows, and people moving through the scene.</li>
+            <li>Keep the video between 1 and 3 minutes for best results.</li>
+            <li>For the highest quality, upload a ready scan from a 3D scanning app as a .ply, .splat or .ksplat file.</li>
+          </ul>
+        </div>
+
         <div>
           <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 font-jetbrains-mono">
             iPhone video

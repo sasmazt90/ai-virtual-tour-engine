@@ -14,13 +14,6 @@ function getExtension(value) {
   }
 }
 
-function normalizeNumberArray(raw, fallback) {
-  if (!Array.isArray(raw)) return fallback;
-  const next = raw.map((v) => Number(v));
-  if (next.some((v) => !Number.isFinite(v))) return fallback;
-  return next;
-}
-
 export async function POST(request) {
   try {
     const session = await auth();
@@ -79,18 +72,12 @@ export async function POST(request) {
       );
     }
 
-    const camera = body?.camera && typeof body.camera === "object" ? body.camera : {};
     const tourPayload = {
       type: "splat3d",
       fileUrl,
       format,
       originalName: originalName || null,
       sourceType: "original",
-      camera: {
-        up: normalizeNumberArray(camera.up, [0, -1, -0.6]).slice(0, 3),
-        position: normalizeNumberArray(camera.position, [-1, -4, 6]).slice(0, 3),
-        lookAt: normalizeNumberArray(camera.lookAt, [0, 0, 0]).slice(0, 3),
-      },
     };
 
     const existing = await sql(
