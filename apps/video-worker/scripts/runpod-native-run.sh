@@ -5,7 +5,15 @@ ENV_FILE="${ENV_FILE:-/workspace/runpod.env}"
 REPO_URL="${REPO_URL:-https://github.com/sasmazt90/ai-virtual-tour-engine.git}"
 REPO_DIR="${REPO_DIR:-/workspace/ai-virtual-tour-engine}"
 OPEN_SPLAT_DIR="${OPEN_SPLAT_DIR:-/workspace/OpenSplat}"
-CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES:-89}"
+
+if [ -z "${CUDA_ARCHITECTURES:-}" ]; then
+  DETECTED_COMPUTE_CAP="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n 1 | tr -d ' .' || true)"
+  if [ -n "$DETECTED_COMPUTE_CAP" ]; then
+    CUDA_ARCHITECTURES="$DETECTED_COMPUTE_CAP"
+  else
+    CUDA_ARCHITECTURES="86"
+  fi
+fi
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "Missing env file: $ENV_FILE"
