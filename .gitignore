@@ -12,3 +12,4 @@ storage/
 .env
 .env.*
 !.env.example
+.runpod-ssh/
