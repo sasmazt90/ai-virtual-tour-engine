@@ -30,6 +30,7 @@ apt-get update
 apt-get install -y --no-install-recommends \
   build-essential \
   ca-certificates \
+  cuda-nvcc-12-8 \
   cmake \
   colmap \
   ffmpeg \
