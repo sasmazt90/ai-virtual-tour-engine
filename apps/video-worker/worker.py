@@ -25,6 +25,11 @@ MIN_REGISTERED_IMAGES = int(os.getenv("MIN_REGISTERED_IMAGES", "80"))
 MIN_REGISTERED_IMAGE_RATIO = float(os.getenv("MIN_REGISTERED_IMAGE_RATIO", "0.35"))
 MIN_SPARSE_POINTS = int(os.getenv("MIN_SPARSE_POINTS", "8000"))
 MIN_SPLAT_COUNT = int(os.getenv("MIN_SPLAT_COUNT", "25000"))
+SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "16384"))
+SIFT_PEAK_THRESHOLD = os.getenv("SIFT_PEAK_THRESHOLD", "0.002")
+SIFT_EDGE_THRESHOLD = os.getenv("SIFT_EDGE_THRESHOLD", "10")
+SEQUENTIAL_MATCH_OVERLAP = int(os.getenv("SEQUENTIAL_MATCH_OVERLAP", "40"))
+EXHAUSTIVE_MATCH_MAX_FRAMES = int(os.getenv("EXHAUSTIVE_MATCH_MAX_FRAMES", "240"))
 
 
 class ReconstructionQualityError(RuntimeError):
@@ -207,6 +212,7 @@ def run_colmap(images_dir, work_dir):
     db_path = work_dir / "colmap.db"
     sparse_dir = work_dir / "sparse"
     sparse_dir.mkdir(parents=True, exist_ok=True)
+    frame_count = count_extracted_frames(images_dir)
 
     run([
         "colmap",
@@ -222,11 +228,11 @@ def run_colmap(images_dir, work_dir):
         "--SiftExtraction.use_gpu",
         "0",
         "--SiftExtraction.max_num_features",
-        "8192",
+        str(SIFT_MAX_NUM_FEATURES),
         "--SiftExtraction.peak_threshold",
-        "0.004",
+        str(SIFT_PEAK_THRESHOLD),
         "--SiftExtraction.edge_threshold",
-        "10",
+        str(SIFT_EDGE_THRESHOLD),
     ])
     run([
         "colmap",
@@ -236,8 +242,19 @@ def run_colmap(images_dir, work_dir):
         "--SiftMatching.use_gpu",
         "0",
         "--SequentialMatching.overlap",
-        "20",
+        str(SEQUENTIAL_MATCH_OVERLAP),
     ])
+    if frame_count <= EXHAUSTIVE_MATCH_MAX_FRAMES:
+        run([
+            "colmap",
+            "exhaustive_matcher",
+            "--database_path",
+            str(db_path),
+            "--SiftMatching.use_gpu",
+            "0",
+            "--SiftMatching.guided_matching",
+            "1",
+        ])
     run([
         "colmap",
         "mapper",
@@ -251,6 +268,8 @@ def run_colmap(images_dir, work_dir):
         "12",
         "--Mapper.init_min_num_inliers",
         "50",
+        "--Mapper.abs_pose_min_num_inliers",
+        "15",
     ])
 
     model_dirs = [path for path in sparse_dir.iterdir() if path.is_dir()]
