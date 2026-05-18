@@ -22,4 +22,10 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 docker build -t "$IMAGE_NAME" "$REPO_DIR/apps/video-worker"
-docker run --rm --gpus all --env-file "$ENV_FILE" "$IMAGE_NAME"
+
+EXTRA_DOCKER_ENV=()
+if [ -n "${PROCESS_JOB_ID:-}" ]; then
+  EXTRA_DOCKER_ENV=(-e "PROCESS_JOB_ID=${PROCESS_JOB_ID}")
+fi
+
+docker run --rm --gpus all --env-file "$ENV_FILE" "${EXTRA_DOCKER_ENV[@]}" "$IMAGE_NAME"
