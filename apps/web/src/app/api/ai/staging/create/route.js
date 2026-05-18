@@ -108,6 +108,8 @@ export async function POST(request) {
     const creditsReserved = calculateStagingCreditCost({
       hasPreferredItems: preferredItemImagesClean.length > 0,
       hasCustomAssets: customAssetIds.length > 0,
+      preferredItemCount: preferredItemImagesClean.length,
+      customAssetCount: customAssetIds.length,
       photoCount: propertyPhotoIds.length,
     });
 
@@ -129,6 +131,8 @@ export async function POST(request) {
       creditCost: creditsReserved,
       baseCost: AI_STAGING_CREDIT_COST,
       photoCount: propertyPhotoIds.length,
+      furnitureReferenceCount:
+        preferredItemImagesClean.length + customAssetIds.length,
       hasCustomFurniture:
         preferredItemImagesClean.length > 0 || customAssetIds.length > 0,
     };

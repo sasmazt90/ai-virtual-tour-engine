@@ -1,6 +1,11 @@
 import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
 import { getDbUserIdFromSession } from "@/app/api/utils/dbUser";
+import {
+  AI_VIDEO_3D_MAX_BYTES,
+  calculateVideo3DTourCreditCost,
+  getVideo3DTourCreditTier,
+} from "@/app/api/utils/pricing";
 
 const SUPPORTED_VIDEO_EXTENSIONS = new Set(["mp4", "mov", "m4v"]);
 
@@ -10,6 +15,17 @@ function getExtension(value) {
     return url.pathname.split(".").pop()?.toLowerCase().trim() || "";
   } catch {
     return String(value || "").split(".").pop()?.toLowerCase().trim() || "";
+  }
+}
+
+async function getRemoteContentLength(url) {
+  try {
+    const res = await fetch(url, { method: "HEAD" });
+    if (!res.ok) return 0;
+    const length = Number(res.headers.get("content-length") || 0);
+    return Number.isFinite(length) && length > 0 ? length : 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -58,6 +74,7 @@ export async function POST(request) {
       typeof body?.videoUrl === "string" ? body.videoUrl.trim() : "";
     const originalName =
       typeof body?.originalName === "string" ? body.originalName.trim() : "";
+    const clientFileSizeBytes = Number(body?.fileSizeBytes || 0) || 0;
 
     if (!propertyId) {
       return Response.json({ error: "Missing property ID." }, { status: 400 });
@@ -78,6 +95,23 @@ export async function POST(request) {
       );
     }
 
+    const remoteFileSizeBytes = await getRemoteContentLength(videoUrl);
+    const fileSizeBytes = Math.max(clientFileSizeBytes, remoteFileSizeBytes);
+
+    if (!Number.isFinite(fileSizeBytes) || fileSizeBytes <= 0) {
+      return Response.json(
+        { error: "Could not verify the uploaded video size." },
+        { status: 400 },
+      );
+    }
+
+    if (fileSizeBytes > AI_VIDEO_3D_MAX_BYTES) {
+      return Response.json(
+        { error: "Video is too large. Please upload a file under 750 MB." },
+        { status: 413 },
+      );
+    }
+
     const props = await sql(
       "SELECT id FROM properties WHERE id = $1 AND user_id = $2 LIMIT 1",
       [propertyId, userId],
@@ -87,38 +121,114 @@ export async function POST(request) {
       return Response.json({ error: "Property not found." }, { status: 404 });
     }
 
+    const creditsReserved = calculateVideo3DTourCreditCost(fileSizeBytes);
+    const pricingTier = getVideo3DTourCreditTier(fileSizeBytes);
+
     const requestPayload = {
       videoUrl,
       originalName: originalName || null,
+      fileSizeBytes,
       captureType: "iphone_video",
       outputType: "gaussian_splat",
       tourType: "splat3d",
+      pricing: {
+        creditCost: creditsReserved,
+        tierLabel: pricingTier?.label || null,
+      },
     };
 
     const rows = await sql(
       `
-      INSERT INTO ai_jobs (
-        user_id,
-        property_id,
-        job_type,
-        job_status,
-        progress,
-        credits_reserved,
-        request_payload,
-        last_heartbeat_at
+      WITH existing_job AS (
+        SELECT id, job_status
+        FROM ai_jobs
+        WHERE user_id = $1
+          AND property_id = $2
+          AND job_type = 'video_3d_tour'
+          AND job_status IN ('queued','running')
+          AND request_payload = $4::jsonb
+        ORDER BY created_at DESC
+        LIMIT 1
+      ),
+      ensured_wallet AS (
+        INSERT INTO credits_wallet (user_id, balance_credits)
+        VALUES ($1, 0)
+        ON CONFLICT (user_id) DO NOTHING
+      ),
+      deducted AS (
+        UPDATE credits_wallet
+        SET balance_credits = balance_credits - $3
+        WHERE user_id = $1
+          AND balance_credits >= $3
+          AND NOT EXISTS (SELECT 1 FROM existing_job)
+        RETURNING balance_credits
+      ),
+      created_job AS (
+        INSERT INTO ai_jobs (
+          user_id,
+          property_id,
+          job_type,
+          job_status,
+          progress,
+          credits_reserved,
+          request_payload,
+          last_heartbeat_at
+        )
+        SELECT $1, $2, 'video_3d_tour', 'queued', 0, $3, $4::jsonb, NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM existing_job)
+          AND EXISTS (SELECT 1 FROM deducted)
+        RETURNING id
+      ),
+      spend_tx AS (
+        INSERT INTO credit_transactions (user_id, transaction_type, credits_delta, meta)
+        SELECT $1, 'spend', -$3, $5::jsonb
+        WHERE EXISTS (SELECT 1 FROM created_job)
+        RETURNING id
       )
-      VALUES ($1, $2, 'video_3d_tour', 'queued', 0, 0, $3::jsonb, NOW())
-      RETURNING id
+      SELECT
+        COALESCE((SELECT id FROM existing_job), (SELECT id FROM created_job)) AS job_id,
+        COALESCE((SELECT job_status FROM existing_job), 'queued') AS job_status,
+        CASE
+          WHEN EXISTS (SELECT 1 FROM existing_job) THEN 'deduped'
+          WHEN EXISTS (SELECT 1 FROM created_job) THEN 'created'
+          ELSE 'insufficient'
+        END AS outcome
       `,
-      [userId, propertyId, JSON.stringify(requestPayload)],
+      [
+        userId,
+        propertyId,
+        creditsReserved,
+        JSON.stringify(requestPayload),
+        JSON.stringify({
+          kind: "reserve",
+          jobType: "video_3d_tour",
+          creditCost: creditsReserved,
+          fileSizeBytes,
+          pricingTier: pricingTier?.label || null,
+        }),
+      ],
     );
 
-    const jobId = rows?.[0]?.id;
-    const worker = jobId ? await notifyWorker({ jobId }) : null;
+    const created = rows?.[0] || null;
+    if (!created || !created.job_id) {
+      return Response.json({ error: "Insufficient credits" }, { status: 402 });
+    }
+
+    if (created.outcome === "insufficient") {
+      return Response.json({ error: "Insufficient credits" }, { status: 402 });
+    }
+
+    const jobId = created.job_id;
+    const worker =
+      created.outcome === "created" ? await notifyWorker({ jobId }) : null;
 
     return Response.json({
       jobId,
-      status: "queued",
+      status: created.outcome === "deduped" ? created.job_status : "queued",
+      creditsReserved,
+      creditCost: creditsReserved,
+      pricingTier,
+      deduped: created.outcome === "deduped",
       worker,
     });
   } catch (error) {

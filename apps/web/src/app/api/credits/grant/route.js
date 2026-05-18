@@ -4,6 +4,7 @@ import {
   getDbUserIdFromSession,
   normalizeUserIdToUuid,
 } from "@/app/api/utils/dbUser";
+import { isCreditAdminEmail } from "@/app/api/utils/pricing";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -15,10 +16,8 @@ export async function POST(request) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Safety: only allow the site owner to grant credits.
     const requesterEmail = String(session.user?.email || "").toLowerCase();
-    const isAdmin = requesterEmail === "sasmazt90@gmail.com";
-    if (!isAdmin) {
+    if (!isCreditAdminEmail(requesterEmail)) {
       return Response.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -32,6 +31,15 @@ export async function POST(request) {
       );
     }
 
+    const targetEmail =
+      typeof body?.targetEmail === "string"
+        ? body.targetEmail.trim().toLowerCase()
+        : "";
+
+    if (targetEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(targetEmail)) {
+      return Response.json({ error: "Invalid target email" }, { status: 400 });
+    }
+
     // Admin can grant to any user. Default: grant to self.
     const targetRaw = body?.targetUserId ?? null;
 
@@ -40,9 +48,28 @@ export async function POST(request) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const targetUserId = targetRaw
-      ? normalizeUserIdToUuid(targetRaw)
-      : requesterUserId;
+    let targetUserId = targetRaw ? normalizeUserIdToUuid(targetRaw) : null;
+
+    if (!targetUserId && targetEmail) {
+      const targetRows = await sql(
+        "SELECT id FROM auth_users WHERE LOWER(email) = $1 LIMIT 1",
+        [targetEmail],
+      );
+      targetUserId = targetRows?.[0]?.id
+        ? normalizeUserIdToUuid(targetRows[0].id)
+        : null;
+
+      if (!targetUserId) {
+        return Response.json(
+          { error: "No user found with that email" },
+          { status: 404 },
+        );
+      }
+    }
+
+    if (!targetUserId) {
+      targetUserId = requesterUserId;
+    }
 
     if (!targetUserId || !UUID_RE.test(String(targetUserId))) {
       return Response.json({ error: "Invalid target user" }, { status: 400 });
@@ -81,6 +108,7 @@ export async function POST(request) {
             reason,
             kind: "manual_grant",
             grantedBy: requesterEmail,
+            targetEmail: targetEmail || null,
           }),
         ],
       ),

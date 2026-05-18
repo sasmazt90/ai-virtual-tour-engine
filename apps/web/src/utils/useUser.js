@@ -33,7 +33,9 @@ const useUser = () => {
     }
   }, [fetchUser]);
 
-  React.useEffect(refetchUser, [refetchUser]);
+  React.useEffect(() => {
+    refetchUser();
+  }, [refetchUser]);
 
   // ---
   // SSR hydration safety:

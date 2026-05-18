@@ -12,6 +12,7 @@ import { ModalShell } from "./ModalShell";
 import { StatusBanner } from "@/components/StatusBanner";
 import {
   AI_STAGING_MAX_PHOTOS_PER_JOB,
+  AI_STAGING_FURNITURE_REFERENCE_CREDIT_COST,
   calculateStagingCreditCost,
 } from "@/app/api/utils/pricing";
 
@@ -149,17 +150,31 @@ export default function CreateStagingModal({
     return calculateStagingCreditCost({
       hasPreferredItems,
       hasCustomAssets,
+      customAssetCount: 0,
       photoCount: 1,
     });
-  }, [hasCustomAssets]);
+  }, []);
+
+  const selectedFurnitureCreditCost = useMemo(() => {
+    return furnitureDisabled
+      ? 0
+      : selectedFurnitureAssetIds.length *
+          AI_STAGING_FURNITURE_REFERENCE_CREDIT_COST;
+  }, [furnitureDisabled, selectedFurnitureAssetIds.length]);
 
   const estimatedCredits = useMemo(() => {
     return calculateStagingCreditCost({
       hasPreferredItems,
       hasCustomAssets,
+      customAssetCount: furnitureDisabled ? 0 : selectedFurnitureAssetIds.length,
       photoCount: selectedCount || 1,
     });
-  }, [hasCustomAssets, selectedCount]);
+  }, [
+    furnitureDisabled,
+    hasCustomAssets,
+    selectedCount,
+    selectedFurnitureAssetIds.length,
+  ]);
 
   const canRun =
     selectedCount > 0 &&
@@ -459,7 +474,7 @@ export default function CreateStagingModal({
     uploadFurnitureMutation.isPending ||
     uploadingFurniture;
 
-  const creditLine = `${Number(creditsBalance || 0).toLocaleString()} balance - ${selectedCount || 0} photos - ${Number(perPhotoCredits || 0).toLocaleString()}/photo - ${Number(estimatedCredits || 0).toLocaleString()} total`;
+  const creditLine = `${Number(creditsBalance || 0).toLocaleString()} balance - ${selectedCount || 0} photos x ${Number(perPhotoCredits || 0).toLocaleString()} - ${furnitureDisabled ? 0 : selectedFurnitureAssetIds.length} furniture refs x ${AI_STAGING_FURNITURE_REFERENCE_CREDIT_COST} - ${Number(estimatedCredits || 0).toLocaleString()} total`;
 
   const lastCreditCostLine = lastCreditCost
     ? `Last generation cost: ${Number(lastCreditCost).toLocaleString()}.`
@@ -479,6 +494,13 @@ export default function CreateStagingModal({
               <div className="mt-1 text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
                 {creditLine}
               </div>
+              {selectedFurnitureCreditCost > 0 ? (
+                <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
+                  Furniture references add{" "}
+                  {selectedFurnitureCreditCost.toLocaleString()} credits to
+                  this run.
+                </div>
+              ) : null}
               {!canRun ? (
                 <div className="mt-2 text-xs text-red-600 dark:text-red-400 font-jetbrains-mono">
                   Not enough credits.

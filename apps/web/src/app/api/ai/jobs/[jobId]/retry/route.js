@@ -4,6 +4,29 @@ import { processStagingJob } from "@/app/api/ai/staging/create/route";
 import { processVirtualTourJob } from "@/app/api/ai/virtual-tour/create/route";
 import { getDbUserIdFromSession } from "@/app/api/utils/dbUser";
 
+async function notifyVideoWorker({ jobId }) {
+  const workerUrl = process.env.VIDEO_TO_SPLAT_WORKER_URL;
+  if (!workerUrl) return { notified: false, reason: "worker_url_missing" };
+
+  try {
+    const res = await fetch(workerUrl.replace(/\/+$/, "") + "/jobs", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(process.env.VIDEO_TO_SPLAT_WORKER_SECRET
+          ? { Authorization: `Bearer ${process.env.VIDEO_TO_SPLAT_WORKER_SECRET}` }
+          : {}),
+      },
+      body: JSON.stringify({ jobId }),
+    });
+
+    return { notified: res.ok, status: res.status };
+  } catch (error) {
+    console.warn("video-to-splat worker retry notification failed", error);
+    return { notified: false, reason: "request_failed" };
+  }
+}
+
 export async function POST(request, { params }) {
   try {
     const session = await auth();
@@ -125,6 +148,10 @@ export async function POST(request, { params }) {
         processVirtualTourJob({ jobId: newJobId }).catch((e) =>
           console.error(e),
         );
+        return;
+      }
+      if (job.job_type === "video_3d_tour") {
+        notifyVideoWorker({ jobId: newJobId }).catch((e) => console.error(e));
         return;
       }
     };

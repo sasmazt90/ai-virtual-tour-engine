@@ -90,7 +90,7 @@ def claim_job(conn, job_id=None):
                     updated_at = NOW()
                 WHERE id = %s
                   AND job_type = 'video_3d_tour'
-                  AND job_status IN ('queued', 'failed')
+                  AND job_status = 'queued'
                 RETURNING *
                 """,
                 [str(job_id)],
@@ -117,6 +117,64 @@ def claim_job(conn, job_id=None):
                 """
             )
         return cur.fetchone()
+
+
+def refund_credits_if_needed(conn, job, reason):
+    credits = float(job.get("credits_reserved") or 0)
+    if credits <= 0:
+        return
+
+    with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+        cur.execute(
+            """
+            SELECT id
+            FROM credit_transactions
+            WHERE user_id = %s
+              AND transaction_type = 'refund'
+              AND meta->>'jobId' = %s
+            LIMIT 1
+            """,
+            [job["user_id"], str(job["id"])],
+        )
+        if cur.fetchone():
+            return
+
+        cur.execute(
+            """
+            WITH ensured_wallet AS (
+              INSERT INTO credits_wallet (user_id, balance_credits)
+              VALUES (%s, 0)
+              ON CONFLICT (user_id) DO NOTHING
+            ),
+            updated_wallet AS (
+              UPDATE credits_wallet
+              SET balance_credits = balance_credits + %s,
+                  updated_at = NOW()
+              WHERE user_id = %s
+              RETURNING balance_credits
+            ),
+            inserted_tx AS (
+              INSERT INTO credit_transactions (
+                user_id,
+                transaction_type,
+                credits_delta,
+                provider,
+                meta
+              )
+              VALUES (%s, 'refund', %s, 'video-worker', %s::jsonb)
+              RETURNING id
+            )
+            SELECT 1 AS ok
+            """,
+            [
+                job["user_id"],
+                credits,
+                job["user_id"],
+                job["user_id"],
+                credits,
+                json.dumps({"jobId": str(job["id"]), "reason": reason}),
+            ],
+        )
 
 
 def download_video(url, out_path):
@@ -435,6 +493,10 @@ def main():
               process_job(conn, job)
           except Exception as exc:
               print(f"Job failed: {exc}", flush=True)
+              try:
+                  refund_credits_if_needed(conn, job, str(exc))
+              except Exception as refund_exc:
+                  print(f"Credit refund failed: {refund_exc}", flush=True)
               update_job(conn, job["id"], status="failed", error=str(exc))
 
           if once_job_id:

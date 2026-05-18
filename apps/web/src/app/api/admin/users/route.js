@@ -1,6 +1,7 @@
 import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
 import { normalizeUserIdToUuid } from "@/app/api/utils/dbUser";
+import { isCreditAdminEmail } from "@/app/api/utils/pricing";
 
 export async function GET() {
   try {
@@ -10,7 +11,7 @@ export async function GET() {
     }
 
     const requesterEmail = String(session.user?.email || "").toLowerCase();
-    if (requesterEmail !== "sasmazt90@gmail.com") {
+    if (!isCreditAdminEmail(requesterEmail)) {
       return Response.json({ error: "Forbidden" }, { status: 403 });
     }
 

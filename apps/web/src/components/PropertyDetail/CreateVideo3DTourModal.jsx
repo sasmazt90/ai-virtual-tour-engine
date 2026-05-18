@@ -2,6 +2,10 @@ import { useCallback, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Clock3, Loader2, Video, XCircle } from "lucide-react";
 import { ModalShell } from "./ModalShell";
+import {
+  AI_VIDEO_3D_CREDIT_TIERS,
+  calculateVideo3DTourCreditCost,
+} from "@/app/api/utils/pricing";
 
 const SUPPORTED_EXTENSIONS = new Set(["mp4", "mov", "m4v"]);
 const DEFAULT_TOTAL_MS = 90 * 60 * 1000;
@@ -125,6 +129,10 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
   const [uploadProgress, setUploadProgress] = useState(0);
 
   const format = useMemo(() => extensionFromName(file?.name), [file?.name]);
+  const estimatedCreditCost = useMemo(
+    () => (file ? calculateVideo3DTourCreditCost(file.size) : null),
+    [file],
+  );
   const uploadLoading = status === "uploading";
   const disableActions = status === "uploading" || status === "starting";
 
@@ -215,6 +223,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
           propertyId,
           videoUrl: uploaded.url,
           originalName: file.name,
+          fileSizeBytes: uploaded.sizeBytes || file.size,
         }),
       });
 
@@ -230,6 +239,9 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
 
       setJobId(body.jobId);
       setStatus("queued");
+      if (userId) {
+        await queryClient.invalidateQueries({ queryKey: ["credits", userId] });
+      }
     } catch (err) {
       console.error(err);
       setStatus("error");
@@ -237,7 +249,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
         err instanceof Error ? err.message : "Could not start the 3D tour.",
       );
     }
-  }, [file, propertyId]);
+  }, [file, propertyId, queryClient, userId]);
 
   if (!open) return null;
 
@@ -286,6 +298,13 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
                 Upload a short walkthrough video. We will turn it into an
                 interactive 3D tour for this property.
               </p>
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
+                Credits are charged by uploaded video size:{" "}
+                {AI_VIDEO_3D_CREDIT_TIERS.map(
+                  (tier) => `${tier.label}: ${tier.credits}`,
+                ).join(" - ")}
+                .
+              </p>
             </div>
           </div>
         </div>
@@ -321,6 +340,9 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
               {file.name} - {(file.size / 1024 / 1024).toFixed(1)} MB -{" "}
               {format || "unknown"}
               {" "}- Limit {formatFileSize(MAX_VIDEO_BYTES)}
+              {estimatedCreditCost
+                ? ` - ${estimatedCreditCost.toLocaleString()} credits`
+                : ""}
             </div>
           ) : null}
         </div>

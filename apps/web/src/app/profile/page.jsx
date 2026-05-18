@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import useUser from "@/utils/useUser";
 import useUpload from "@/utils/useUpload";
+import { isCreditAdminEmail } from "@/app/api/utils/pricing";
 
 export default function ProfilePage() {
   const { data: user, loading: userLoading } = useUser();
@@ -15,6 +16,9 @@ export default function ProfilePage() {
   const [upload, { loading: logoUploading }] = useUpload();
 
   const isAdmin = useMemo(() => {
+    return isCreditAdminEmail(user?.email);
+  }, [user?.email]);
+  const canSeeInternalTools = useMemo(() => {
     const email = String(user?.email || "").toLowerCase();
     return email === "sasmazt90@gmail.com";
   }, [user?.email]);
@@ -112,24 +116,7 @@ export default function ProfilePage() {
     [upload],
   );
 
-  const {
-    data: adminUsers,
-    isLoading: adminUsersLoading,
-    error: adminUsersError,
-  } = useQuery({
-    queryKey: ["adminUsers"],
-    queryFn: async () => {
-      const res = await fetch("/api/admin/users");
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error || "Failed to fetch users");
-      }
-      return res.json();
-    },
-    enabled: !!user?.id && isAdmin,
-  });
-
-  const [targetUserId, setTargetUserId] = useState("");
+  const [targetEmail, setTargetEmail] = useState("");
   const [creditsToGrant, setCreditsToGrant] = useState("");
   const [grantMessage, setGrantMessage] = useState(null);
   const [grantError, setGrantError] = useState(null);
@@ -144,15 +131,16 @@ export default function ProfilePage() {
         throw new Error("Please enter a positive credits amount");
       }
 
-      if (!targetUserId) {
-        throw new Error("Please select a user");
+      const email = String(targetEmail || "").trim().toLowerCase();
+      if (!email) {
+        throw new Error("Please enter a user email");
       }
 
       const res = await fetch("/api/credits/grant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          targetUserId,
+          targetEmail: email,
           credits,
           reason: "admin_grant",
         }),
@@ -171,6 +159,7 @@ export default function ProfilePage() {
         `Credits granted. New balance: ${balance.toLocaleString()}`,
       );
       setCreditsToGrant("");
+      setTargetEmail("");
     },
     onError: (e) => {
       console.error(e);
@@ -197,8 +186,6 @@ export default function ProfilePage() {
     }
     return null;
   }
-
-  const adminSelectOptions = Array.isArray(adminUsers) ? adminUsers : [];
 
   return (
     <div className="min-h-screen">
@@ -348,39 +335,21 @@ export default function ProfilePage() {
                 Admin: Add Credits
               </h2>
               <p className="text-sm text-gray-600 dark:text-gray-300 mb-5 font-jetbrains-mono">
-                Select a user and grant credits to their account.
+                Enter a user email and grant credits to their account.
               </p>
-
-              {adminUsersError ? (
-                <div className="mb-4 text-sm text-red-600 dark:text-red-400 font-jetbrains-mono">
-                  {adminUsersError?.message || "Failed to load users"}
-                </div>
-              ) : null}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 font-jetbrains-mono">
-                    User
+                    User Email
                   </label>
-                  <select
-                    value={targetUserId}
-                    onChange={(e) => setTargetUserId(e.target.value)}
+                  <input
+                    type="email"
+                    value={targetEmail}
+                    onChange={(e) => setTargetEmail(e.target.value)}
+                    placeholder="agent@example.com"
                     className="w-full px-4 py-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-[var(--brand)] font-jetbrains-mono"
-                  >
-                    <option value="">Select a user…</option>
-                    {adminUsersLoading
-                      ? null
-                      : adminSelectOptions.map((u) => {
-                          const label = u?.name
-                            ? `${u.name} • ${u.email}`
-                            : String(u?.email || u?.user_id);
-                          return (
-                            <option key={u.user_id} value={u.user_id}>
-                              {label}
-                            </option>
-                          );
-                        })}
-                  </select>
+                  />
                 </div>
 
                 <div className="space-y-2">
@@ -423,7 +392,7 @@ export default function ProfilePage() {
           ) : null}
 
           {/* Internal tools (admin-only) */}
-          {isAdmin ? (
+          {canSeeInternalTools ? (
             <div className="mt-6 bg-white/70 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 backdrop-blur shadow-[0_14px_60px_rgba(0,0,0,0.18)] p-6 sm:p-8">
               <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4 font-jetbrains-mono">
                 Internal Tools

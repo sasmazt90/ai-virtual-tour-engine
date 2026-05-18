@@ -132,6 +132,7 @@ export async function POST(request) {
         config.bucket,
       )}/${publicObjectPath}`,
       mimeType,
+      sizeBytes: contentLength || null,
     });
   } catch (error) {
     console.error("POST /api/upload/large error:", error);
