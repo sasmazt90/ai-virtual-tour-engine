@@ -40,6 +40,10 @@ apt-get install -y --no-install-recommends \
   python3-pip \
   xvfb
 
+export PATH="/usr/local/cuda/bin:$PATH"
+export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+export CUDACXX="${CUDACXX:-/usr/local/cuda/bin/nvcc}"
+
 if [ ! -d "$REPO_DIR/.git" ]; then
   git clone "$REPO_URL" "$REPO_DIR"
 else
