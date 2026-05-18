@@ -15,9 +15,13 @@ if [ -z "${CUDA_ARCHITECTURES:-}" ]; then
   fi
 fi
 
-if [ ! -f "$ENV_FILE" ]; then
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  source "$ENV_FILE"
+  set +a
+elif [ -z "${DATABASE_URL:-}" ] || [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
   echo "Missing env file: $ENV_FILE"
-  echo "Create it from apps/video-worker/runpod.env.example and fill the real values."
+  echo "Create it from apps/video-worker/runpod.env.example and fill the real values, or pass DATABASE_URL, SUPABASE_URL, and SUPABASE_SERVICE_ROLE_KEY as environment variables."
   exit 1
 fi
 
@@ -65,10 +69,6 @@ PY
     -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES"
   cmake --build "$OPEN_SPLAT_DIR/build" --config Release
 fi
-
-set -a
-source "$ENV_FILE"
-set +a
 
 export QT_QPA_PLATFORM=offscreen
 unset DISPLAY
