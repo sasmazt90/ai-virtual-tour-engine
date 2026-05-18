@@ -17,7 +17,7 @@ fi
 
 if [ -f "$ENV_FILE" ]; then
   set -a
-  source "$ENV_FILE"
+  source <(sed 's/\r$//' "$ENV_FILE")
   set +a
 elif [ -z "${DATABASE_URL:-}" ] || [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
   echo "Missing env file: $ENV_FILE"
