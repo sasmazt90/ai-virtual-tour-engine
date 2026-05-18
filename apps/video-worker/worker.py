@@ -30,6 +30,7 @@ SIFT_PEAK_THRESHOLD = os.getenv("SIFT_PEAK_THRESHOLD", "0.002")
 SIFT_EDGE_THRESHOLD = os.getenv("SIFT_EDGE_THRESHOLD", "10")
 SEQUENTIAL_MATCH_OVERLAP = int(os.getenv("SEQUENTIAL_MATCH_OVERLAP", "40"))
 EXHAUSTIVE_MATCH_MAX_FRAMES = int(os.getenv("EXHAUSTIVE_MATCH_MAX_FRAMES", "240"))
+COLMAP_USE_GPU = os.getenv("COLMAP_USE_GPU", "1")
 
 
 class ReconstructionQualityError(RuntimeError):
@@ -226,7 +227,7 @@ def run_colmap(images_dir, work_dir):
         "--ImageReader.camera_model",
         "SIMPLE_RADIAL",
         "--SiftExtraction.use_gpu",
-        "0",
+        COLMAP_USE_GPU,
         "--SiftExtraction.max_num_features",
         str(SIFT_MAX_NUM_FEATURES),
         "--SiftExtraction.peak_threshold",
@@ -240,7 +241,7 @@ def run_colmap(images_dir, work_dir):
         "--database_path",
         str(db_path),
         "--SiftMatching.use_gpu",
-        "0",
+        COLMAP_USE_GPU,
         "--SequentialMatching.overlap",
         str(SEQUENTIAL_MATCH_OVERLAP),
     ])
@@ -251,7 +252,7 @@ def run_colmap(images_dir, work_dir):
             "--database_path",
             str(db_path),
             "--SiftMatching.use_gpu",
-            "0",
+            COLMAP_USE_GPU,
             "--SiftMatching.guided_matching",
             "1",
         ])
