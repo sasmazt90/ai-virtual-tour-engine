@@ -9,8 +9,11 @@ REPO_DIR="${REPO_DIR:-/workspace/ai-virtual-tour-engine}"
 if [ ! -d "$REPO_DIR/.git" ]; then
   git clone "$REPO_URL" "$REPO_DIR"
 else
-  git -C "$REPO_DIR" pull --ff-only
+  git -C "$REPO_DIR" fetch origin main
+  git -C "$REPO_DIR" reset --hard origin/main
 fi
+
+echo "Worker repository commit: $(git -C "$REPO_DIR" rev-parse --short HEAD)"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "Missing env file: $ENV_FILE"
