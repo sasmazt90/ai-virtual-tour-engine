@@ -10,6 +10,7 @@ export const AI_STAGING_FURNITURE_REFERENCE_CREDIT_COST = 15;
 export const AI_STAGING_MAX_PHOTOS_PER_JOB = 12;
 
 export const AI_VIDEO_3D_MAX_BYTES = 750 * 1024 * 1024;
+export const AI_VIDEO_3D_MAX_FILES = 8;
 
 export const AI_VIDEO_3D_CREDIT_TIERS = [
   { maxBytes: 250 * 1024 * 1024, credits: 300, label: "Up to 250 MB" },

@@ -192,7 +192,7 @@ def download_video(url, out_path):
                     f.write(chunk)
 
 
-def extract_frames(video_path, images_dir):
+def extract_frames(video_path, images_dir, pattern="frame_%06d.jpg"):
     images_dir.mkdir(parents=True, exist_ok=True)
     vf = f"fps={FRAME_RATE},scale='min({MAX_IMAGE_SIZE},iw)':-2,setsar=1"
     run([
@@ -205,8 +205,19 @@ def extract_frames(video_path, images_dir):
         vf,
         "-q:v",
         "2",
-        str(images_dir / "frame_%06d.jpg"),
+        str(images_dir / pattern),
     ])
+
+
+def extract_video_set(video_urls, work_dir, images_dir):
+    video_count = len(video_urls)
+    for index, video_url in enumerate(video_urls, start=1):
+        video_path = work_dir / f"input_video_{index:03d}"
+        print(f"Downloading clip {index}/{video_count}", flush=True)
+        download_video(video_url, video_path)
+        update_pattern = f"clip{index:03d}_frame_%06d.jpg"
+        print(f"Extracting frames from clip {index}/{video_count}", flush=True)
+        extract_frames(video_path, images_dir, update_pattern)
 
 
 def run_colmap(images_dir, work_dir):
@@ -363,8 +374,8 @@ def assert_reconstruction_quality(frame_count, stats, splat_count):
 
     if failures:
         raise ReconstructionQualityError(
-            "This video does not contain enough stable visual overlap for a reliable 3D tour. "
-            "Please record a slower, brighter walkthrough with more overlap between views. "
+            "The uploaded video set does not contain enough stable visual overlap for a reliable 3D tour. "
+            "Please record slower, brighter clips with shared overlap between consecutive videos. "
             f"Quality checks failed: {', '.join(failures)}."
         )
 
@@ -407,13 +418,15 @@ def upload_result(path):
 
 
 def save_virtual_tour(conn, job, file_url, output_format, quality):
+    request_payload = job.get("request_payload") or {}
     payload = {
         "type": "splat3d",
         "fileUrl": file_url,
         "format": output_format,
         "sourceType": "original",
-        "generatedFrom": "iphone_video",
+        "generatedFrom": request_payload.get("captureType") or "iphone_video",
         "jobId": str(job["id"]),
+        "videoCount": request_payload.get("videoCount") or 1,
         "quality": {
             **quality,
             "profile": "validated",
@@ -455,21 +468,32 @@ def save_virtual_tour(conn, job, file_url, output_format, quality):
 
 def process_job(conn, job):
     request_payload = job["request_payload"] or {}
-    video_url = request_payload.get("videoUrl")
-    if not video_url:
-        raise RuntimeError("Job is missing request_payload.videoUrl.")
+    videos = request_payload.get("videos")
+    if isinstance(videos, list) and videos:
+        video_urls = [
+            item.get("videoUrl") or item.get("url")
+            for item in sorted(
+                [item for item in videos if isinstance(item, dict)],
+                key=lambda item: int(item.get("index") or 0),
+            )
+        ]
+        video_urls = [url for url in video_urls if url]
+    else:
+        video_url = request_payload.get("videoUrl")
+        video_urls = [video_url] if video_url else []
+
+    if not video_urls:
+        raise RuntimeError("Job is missing request_payload.videoUrl or videos[].videoUrl.")
 
     with tempfile.TemporaryDirectory(prefix="video-3d-tour-") as tmp:
         work_dir = Path(tmp)
-        video_path = work_dir / "input_video"
         images_dir = work_dir / "images"
         output_path = work_dir / "tour.ply"
 
         update_job(conn, job["id"], progress=5)
-        download_video(video_url, video_path)
+        extract_video_set(video_urls, work_dir, images_dir)
 
         update_job(conn, job["id"], progress=15)
-        extract_frames(video_path, images_dir)
         frame_count = count_extracted_frames(images_dir)
 
         update_job(conn, job["id"], progress=35)

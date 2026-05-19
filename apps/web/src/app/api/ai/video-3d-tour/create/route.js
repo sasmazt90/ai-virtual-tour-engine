@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { getDbUserIdFromSession } from "@/app/api/utils/dbUser";
 import {
   AI_VIDEO_3D_MAX_BYTES,
+  AI_VIDEO_3D_MAX_FILES,
   calculateVideo3DTourCreditCost,
   getVideo3DTourCreditTier,
 } from "@/app/api/utils/pricing";
@@ -27,6 +28,46 @@ async function getRemoteContentLength(url) {
   } catch {
     return 0;
   }
+}
+
+function normalizeVideoInputs(body) {
+  const rawVideos = Array.isArray(body?.videos) ? body.videos : null;
+  if (rawVideos) {
+    return rawVideos
+      .map((item, index) => ({
+        videoUrl:
+          typeof item?.videoUrl === "string"
+            ? item.videoUrl.trim()
+            : typeof item?.url === "string"
+              ? item.url.trim()
+              : "",
+        originalName:
+          typeof item?.originalName === "string"
+            ? item.originalName.trim()
+            : typeof item?.name === "string"
+              ? item.name.trim()
+              : "",
+        fileSizeBytes: Number(item?.fileSizeBytes || item?.sizeBytes || 0) || 0,
+        index,
+      }))
+      .filter((item) => item.videoUrl);
+  }
+
+  const videoUrl =
+    typeof body?.videoUrl === "string" ? body.videoUrl.trim() : "";
+  return videoUrl
+    ? [
+        {
+          videoUrl,
+          originalName:
+            typeof body?.originalName === "string"
+              ? body.originalName.trim()
+              : "",
+          fileSizeBytes: Number(body?.fileSizeBytes || 0) || 0,
+          index: 0,
+        },
+      ]
+    : [];
 }
 
 async function notifyWorker({ jobId }) {
@@ -70,44 +111,69 @@ export async function POST(request) {
     const body = await request.json().catch(() => ({}));
     const propertyId =
       typeof body?.propertyId === "string" ? body.propertyId.trim() : "";
-    const videoUrl =
-      typeof body?.videoUrl === "string" ? body.videoUrl.trim() : "";
-    const originalName =
-      typeof body?.originalName === "string" ? body.originalName.trim() : "";
-    const clientFileSizeBytes = Number(body?.fileSizeBytes || 0) || 0;
+    const videoInputs = normalizeVideoInputs(body);
 
     if (!propertyId) {
       return Response.json({ error: "Missing property ID." }, { status: 400 });
     }
 
-    if (!videoUrl || !/^https?:\/\//i.test(videoUrl)) {
+    if (videoInputs.length === 0) {
       return Response.json(
-        { error: "Please upload an iPhone video first." },
+        { error: "Please upload at least one iPhone video first." },
         { status: 400 },
       );
     }
 
-    const ext = getExtension(originalName) || getExtension(videoUrl);
-    if (!SUPPORTED_VIDEO_EXTENSIONS.has(ext)) {
+    if (videoInputs.length > AI_VIDEO_3D_MAX_FILES) {
       return Response.json(
-        { error: "Supported video formats are .mp4, .mov and .m4v." },
+        { error: `Please upload ${AI_VIDEO_3D_MAX_FILES} videos or fewer.` },
         { status: 400 },
       );
     }
 
-    const remoteFileSizeBytes = await getRemoteContentLength(videoUrl);
-    const fileSizeBytes = Math.max(clientFileSizeBytes, remoteFileSizeBytes);
+    for (const input of videoInputs) {
+      if (!/^https?:\/\//i.test(input.videoUrl)) {
+        return Response.json(
+          { error: "One of the uploaded videos is invalid." },
+          { status: 400 },
+        );
+      }
 
-    if (!Number.isFinite(fileSizeBytes) || fileSizeBytes <= 0) {
-      return Response.json(
-        { error: "Could not verify the uploaded video size." },
-        { status: 400 },
-      );
+      const ext = getExtension(input.originalName) || getExtension(input.videoUrl);
+      if (!SUPPORTED_VIDEO_EXTENSIONS.has(ext)) {
+        return Response.json(
+          { error: "Supported video formats are .mp4, .mov and .m4v." },
+          { status: 400 },
+        );
+      }
     }
 
-    if (fileSizeBytes > AI_VIDEO_3D_MAX_BYTES) {
+    const verifiedVideos = [];
+    for (const input of videoInputs) {
+      const remoteFileSizeBytes = await getRemoteContentLength(input.videoUrl);
+      const fileSizeBytes = Math.max(input.fileSizeBytes, remoteFileSizeBytes);
+      if (!Number.isFinite(fileSizeBytes) || fileSizeBytes <= 0) {
+        return Response.json(
+          { error: "Could not verify one of the uploaded video sizes." },
+          { status: 400 },
+        );
+      }
+      verifiedVideos.push({
+        videoUrl: input.videoUrl,
+        originalName: input.originalName || null,
+        fileSizeBytes,
+        index: input.index,
+      });
+    }
+
+    const totalFileSizeBytes = verifiedVideos.reduce(
+      (sum, item) => sum + item.fileSizeBytes,
+      0,
+    );
+
+    if (totalFileSizeBytes > AI_VIDEO_3D_MAX_BYTES) {
       return Response.json(
-        { error: "Video is too large. Please upload a file under 750 MB." },
+        { error: "Videos are too large. Please upload 750 MB total or less." },
         { status: 413 },
       );
     }
@@ -121,14 +187,16 @@ export async function POST(request) {
       return Response.json({ error: "Property not found." }, { status: 404 });
     }
 
-    const creditsReserved = calculateVideo3DTourCreditCost(fileSizeBytes);
-    const pricingTier = getVideo3DTourCreditTier(fileSizeBytes);
+    const creditsReserved = calculateVideo3DTourCreditCost(totalFileSizeBytes);
+    const pricingTier = getVideo3DTourCreditTier(totalFileSizeBytes);
 
     const requestPayload = {
-      videoUrl,
-      originalName: originalName || null,
-      fileSizeBytes,
-      captureType: "iphone_video",
+      videoUrl: verifiedVideos[0]?.videoUrl || null,
+      originalName: verifiedVideos[0]?.originalName || null,
+      fileSizeBytes: totalFileSizeBytes,
+      videos: verifiedVideos,
+      videoCount: verifiedVideos.length,
+      captureType: verifiedVideos.length > 1 ? "iphone_video_set" : "iphone_video",
       outputType: "gaussian_splat",
       tourType: "splat3d",
       pricing: {
@@ -203,7 +271,8 @@ export async function POST(request) {
           kind: "reserve",
           jobType: "video_3d_tour",
           creditCost: creditsReserved,
-          fileSizeBytes,
+          fileSizeBytes: totalFileSizeBytes,
+          videoCount: verifiedVideos.length,
           pricingTier: pricingTier?.label || null,
         }),
       ],

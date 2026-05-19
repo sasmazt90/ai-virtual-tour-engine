@@ -4,6 +4,7 @@ import { CheckCircle2, Clock3, Loader2, Video, XCircle } from "lucide-react";
 import { ModalShell } from "./ModalShell";
 import {
   AI_VIDEO_3D_CREDIT_TIERS,
+  AI_VIDEO_3D_MAX_FILES,
   calculateVideo3DTourCreditCost,
 } from "@/app/api/utils/pricing";
 
@@ -29,6 +30,10 @@ function formatFileSize(bytes) {
   if (!Number.isFinite(n) || n <= 0) return "0 MB";
   if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function fileListFromInput(fileList) {
+  return Array.from(fileList || []);
 }
 
 function uploadLargeVideo(file, onProgress) {
@@ -122,16 +127,19 @@ function userSafeJobError(rawError) {
 
 export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
   const queryClient = useQueryClient();
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
   const [jobId, setJobId] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  const format = useMemo(() => extensionFromName(file?.name), [file?.name]);
+  const totalFileSize = useMemo(
+    () => files.reduce((sum, item) => sum + Number(item?.size || 0), 0),
+    [files],
+  );
   const estimatedCreditCost = useMemo(
-    () => (file ? calculateVideo3DTourCreditCost(file.size) : null),
-    [file],
+    () => (files.length ? calculateVideo3DTourCreditCost(totalFileSize) : null),
+    [files.length, totalFileSize],
   );
   const uploadLoading = status === "uploading";
   const disableActions = status === "uploading" || status === "starting";
@@ -182,23 +190,31 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
       return;
     }
 
-    if (!file) {
+    if (files.length === 0) {
       setStatus("error");
-      setError("Choose an iPhone video first.");
+      setError("Choose at least one iPhone video first.");
       return;
     }
 
-    const nextFormat = extensionFromName(file.name);
-    if (!SUPPORTED_EXTENSIONS.has(nextFormat)) {
+    if (files.length > AI_VIDEO_3D_MAX_FILES) {
+      setStatus("error");
+      setError(`Upload ${AI_VIDEO_3D_MAX_FILES} videos or fewer.`);
+      return;
+    }
+
+    const invalidFile = files.find(
+      (candidate) => !SUPPORTED_EXTENSIONS.has(extensionFromName(candidate.name)),
+    );
+    if (invalidFile) {
       setStatus("error");
       setError("Supported video formats are .mp4, .mov and .m4v.");
       return;
     }
 
-    if (file.size > MAX_VIDEO_BYTES) {
+    if (totalFileSize > MAX_VIDEO_BYTES) {
       setStatus("error");
       setError(
-        `Video is too large (${formatFileSize(file.size)}). Please upload a file under ${formatFileSize(MAX_VIDEO_BYTES)}.`,
+        `Videos are too large (${formatFileSize(totalFileSize)} total). Please upload ${formatFileSize(MAX_VIDEO_BYTES)} total or less.`,
       );
       return;
     }
@@ -209,9 +225,25 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
     setJobId(null);
 
     try {
-      const uploaded = await uploadLargeVideo(file, setUploadProgress);
-      if (uploaded?.error || !uploaded?.url) {
-        throw new Error(uploaded?.error || "Video upload failed.");
+      const uploadedVideos = [];
+      let completedBytes = 0;
+      for (const [index, item] of files.entries()) {
+        const uploaded = await uploadLargeVideo(item, (fileProgress) => {
+          const currentBytes = (Number(fileProgress || 0) / 100) * item.size;
+          setUploadProgress(
+            Math.round(((completedBytes + currentBytes) / totalFileSize) * 100),
+          );
+        });
+        if (uploaded?.error || !uploaded?.url) {
+          throw new Error(uploaded?.error || "Video upload failed.");
+        }
+        completedBytes += item.size;
+        uploadedVideos.push({
+          videoUrl: uploaded.url,
+          originalName: item.name,
+          fileSizeBytes: uploaded.sizeBytes || item.size,
+          index,
+        });
       }
 
       setStatus("starting");
@@ -221,9 +253,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           propertyId,
-          videoUrl: uploaded.url,
-          originalName: file.name,
-          fileSizeBytes: uploaded.sizeBytes || file.size,
+          videos: uploadedVideos,
         }),
       });
 
@@ -249,7 +279,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
         err instanceof Error ? err.message : "Could not start the 3D tour.",
       );
     }
-  }, [file, propertyId, queryClient, userId]);
+  }, [files, propertyId, queryClient, totalFileSize, userId]);
 
   if (!open) return null;
 
@@ -295,11 +325,11 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
                 Create from iPhone video
               </div>
               <p className="mt-1 text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
-                Upload a short walkthrough video. We will turn it into an
+                Upload one or more overlapping room videos. We will align them into an
                 interactive 3D tour for this property.
               </p>
               <p className="mt-2 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
-                Credits are charged by uploaded video size:{" "}
+                Credits are charged by total uploaded video size:{" "}
                 {AI_VIDEO_3D_CREDIT_TIERS.map(
                   (tier) => `${tier.label}: ${tier.credits}`,
                 ).join(" - ")}
@@ -315,6 +345,8 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
           </div>
           <ul className="mt-2 space-y-2 text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono list-disc pl-5">
             <li>Record one room or one connected area per video.</li>
+            <li>Upload videos in walking order: entry, corridor, room, next room.</li>
+            <li>Leave 5-10 seconds of overlap at the end of one clip and the start of the next clip.</li>
             <li>Use landscape mode, preferably 4K or 1080p, with good lighting.</li>
             <li>Walk slowly and keep the phone steady at chest height.</li>
             <li>Move in a smooth loop and capture each wall or furniture area from more than one angle.</li>
@@ -326,23 +358,34 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
 
         <div>
           <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 font-jetbrains-mono">
-            iPhone video
+            iPhone videos
           </label>
           <input
             type="file"
             accept="video/mp4,video/quicktime,.mp4,.mov,.m4v"
+            multiple
             disabled={disableActions || !!jobId}
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
+            onChange={(e) => setFiles(fileListFromInput(e.target.files))}
             className="mt-2 block w-full text-sm text-gray-700 dark:text-gray-200 font-jetbrains-mono file:mr-3 file:rounded-md file:border-0 file:bg-amber-500 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-amber-600"
           />
-          {file ? (
-            <div className="mt-2 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
-              {file.name} - {(file.size / 1024 / 1024).toFixed(1)} MB -{" "}
-              {format || "unknown"}
-              {" "}- Limit {formatFileSize(MAX_VIDEO_BYTES)}
-              {estimatedCreditCost
-                ? ` - ${estimatedCreditCost.toLocaleString()} credits`
-                : ""}
+          {files.length ? (
+            <div className="mt-2 space-y-1 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
+              <div>
+                {files.length} video{files.length === 1 ? "" : "s"} -{" "}
+                {formatFileSize(totalFileSize)} total - Limit{" "}
+                {formatFileSize(MAX_VIDEO_BYTES)}
+                {estimatedCreditCost
+                  ? ` - ${estimatedCreditCost.toLocaleString()} credits`
+                  : ""}
+              </div>
+              <ol className="list-decimal pl-5">
+                {files.map((item) => (
+                  <li key={`${item.name}-${item.size}-${item.lastModified}`}>
+                    {item.name} - {formatFileSize(item.size)} -{" "}
+                    {extensionFromName(item.name) || "unknown"}
+                  </li>
+                ))}
+              </ol>
             </div>
           ) : null}
         </div>
