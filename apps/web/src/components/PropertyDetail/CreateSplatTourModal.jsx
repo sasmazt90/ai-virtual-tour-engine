@@ -49,13 +49,13 @@ function uploadLargeScan(file, onProgress) {
       reject(
         new Error(
           body?.error ||
-            `3D scan upload failed: [${xhr.status}] ${xhr.statusText}`,
+            `3D tour upload failed: [${xhr.status}] ${xhr.statusText}`,
         ),
       );
     };
 
-    xhr.onerror = () => reject(new Error("3D scan upload failed."));
-    xhr.onabort = () => reject(new Error("3D scan upload was cancelled."));
+    xhr.onerror = () => reject(new Error("3D tour upload failed."));
+    xhr.onabort = () => reject(new Error("3D tour upload was cancelled."));
     xhr.send(file);
   });
 }
@@ -90,14 +90,14 @@ export function CreateSplatTourModal({ open, onClose, propertyId, userId }) {
 
     const nextFormat = extensionFromName(file.name);
     if (!SUPPORTED_EXTENSIONS.has(nextFormat)) {
-      setError("Supported 3D scan formats are .ply, .splat and .ksplat.");
+      setError("Supported 3D tour formats are .ply, .splat and .ksplat.");
       setStatus("error");
       return;
     }
 
     if (file.size > MAX_SCAN_BYTES) {
       setError(
-        `3D scan is too large (${formatFileSize(file.size)}). Please upload a file under ${formatFileSize(
+        `3D tour file is too large (${formatFileSize(file.size)}). Please upload a file under ${formatFileSize(
           MAX_SCAN_BYTES,
         )}.`,
       );
@@ -155,14 +155,14 @@ export function CreateSplatTourModal({ open, onClose, propertyId, userId }) {
   if (!open) return null;
 
   return (
-    <ModalShell title="Upload 3D Virtual Tour" onClose={safeOnClose}>
+    <ModalShell title="Upload 3D Tour" onClose={safeOnClose}>
       <div className="space-y-4">
         <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#171717] p-4">
           <div className="flex items-start gap-3">
             <Upload className="mt-0.5 h-5 w-5 text-amber-500" />
             <div>
               <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 font-jetbrains-mono">
-                3D scan
+                Ready 3D tour file
               </div>
               <p className="mt-1 text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
                 Upload a ready 3D tour file exported as .ply, .splat or .ksplat.
@@ -175,7 +175,7 @@ export function CreateSplatTourModal({ open, onClose, propertyId, userId }) {
 
         <div>
           <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 font-jetbrains-mono">
-            3D scan file
+            3D tour file
           </label>
           <input
             type="file"
@@ -198,14 +198,14 @@ export function CreateSplatTourModal({ open, onClose, propertyId, userId }) {
         </div>
 
         <div className="text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
-          Tip: for faster loading on the web, use .splat or .ksplat for large
-          scans.
+          For smoother viewing, compressed 3D tour files load faster than large
+          raw exports.
         </div>
 
         {status === "uploading" || status === "saving" ? (
           <div className="text-sm text-gray-700 dark:text-gray-200 font-jetbrains-mono">
             {status === "uploading"
-              ? `Uploading 3D scan... ${uploadProgress}%`
+              ? `Uploading 3D tour... ${uploadProgress}%`
               : "Saving 3D tour..."}
           </div>
         ) : null}

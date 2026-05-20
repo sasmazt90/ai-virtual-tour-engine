@@ -28,7 +28,7 @@ export default function FAQPage() {
       },
       {
         q: "How do 3D virtual tours work?",
-        a: "You can create a 3D tour from an iPhone walkthrough video or upload a ready 3D scan file. The result can be saved to the property and shared with clients as part of the listing assets.",
+        a: "You can create a 3D tour from an iPhone walkthrough video or upload a ready 3D tour file. The result can be saved to the property and shared with clients as part of the listing assets.",
       },
       {
         q: "What are coins and what are they used for?",

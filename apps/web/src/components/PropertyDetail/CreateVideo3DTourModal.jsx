@@ -352,7 +352,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
             <li>Move in a smooth loop and capture each wall or furniture area from more than one angle.</li>
             <li>Avoid fast turns, blurry motion, dark corners, mirrors, windows, and people moving through the scene.</li>
             <li>Keep the video between 1 and 3 minutes for best results.</li>
-            <li>For the highest quality, upload a ready scan from a 3D scanning app as a .ply, .splat or .ksplat file.</li>
+            <li>For the highest quality, upload a ready 3D tour file as a .ply, .splat or .ksplat file.</li>
           </ul>
         </div>
 

@@ -48,14 +48,14 @@ export async function POST(request) {
 
     if (!fileUrl || !/^https?:\/\//i.test(fileUrl)) {
       return Response.json(
-        { error: "Please upload a valid 3D scan file first." },
+        { error: "Please upload a valid 3D tour file first." },
         { status: 400 },
       );
     }
 
     if (!SUPPORTED_SPLAT_EXTENSIONS.has(format)) {
       return Response.json(
-        { error: "Supported 3D scan formats are .ply, .splat and .ksplat." },
+        { error: "Supported 3D tour formats are .ply, .splat and .ksplat." },
         { status: 400 },
       );
     }

@@ -144,10 +144,7 @@ export function VirtualToursSection({ property, propertyId }) {
         <div className="space-y-2">
           {tours.map((t) => {
             const title = displayTitleById[t.id] || "Virtual Tour";
-            const kindLabel =
-              typeof t?.tour_type === "string" && t.tour_type
-                ? t.tour_type
-                : "tour";
+            const sceneCount = Number(t?.tour_payload?.sceneCount || 0);
 
             return (
               <div
@@ -159,9 +156,11 @@ export function VirtualToursSection({ property, propertyId }) {
                     <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 font-jetbrains-mono">
                       {title}
                     </div>
-                    <div className="mt-1 text-xs text-gray-500 dark:text-gray-500 font-jetbrains-mono">
-                      Type: {kindLabel}
-                    </div>
+                    {sceneCount > 1 ? (
+                      <div className="mt-1 text-xs text-gray-500 dark:text-gray-500 font-jetbrains-mono">
+                        {sceneCount} areas
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="shrink-0 flex items-center gap-2">
@@ -217,7 +216,7 @@ export function VirtualToursSection({ property, propertyId }) {
           ) : (
             <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-950 p-6 text-sm text-gray-200 font-jetbrains-mono">
               This virtual tour format is no longer supported. Create a new 3D
-              tour from an iPhone video or upload a 3D scan file.
+              tour from an iPhone video or upload a ready 3D tour file.
             </div>
           )}
         </ModalShell>

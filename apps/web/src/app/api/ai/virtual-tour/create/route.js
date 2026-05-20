@@ -419,7 +419,7 @@ export async function processVirtualTourJob({ jobId }) {
     const tourPayload = await buildNode360PayloadWithOpenAI(imageUrls);
     if (!tourPayload) {
       throw new Error(
-        "Photo-based virtual tours are no longer supported. Upload an iPhone video or a 3D scan instead.",
+        "Photo-based virtual tours are no longer supported. Upload an iPhone video or a ready 3D tour file instead.",
       );
     }
 
@@ -498,7 +498,7 @@ export async function POST() {
   return Response.json(
     {
       error:
-        "Photo-based virtual tours have been removed. Upload an iPhone video or a 3D scan instead.",
+        "Photo-based virtual tours have been removed. Upload an iPhone video or a ready 3D tour file instead.",
     },
     { status: 410 },
   );

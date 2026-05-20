@@ -1,5 +1,8 @@
 import json
+import hashlib
 import os
+import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -25,6 +28,8 @@ MIN_REGISTERED_IMAGES = int(os.getenv("MIN_REGISTERED_IMAGES", "80"))
 MIN_REGISTERED_IMAGE_RATIO = float(os.getenv("MIN_REGISTERED_IMAGE_RATIO", "0.35"))
 MIN_SPARSE_POINTS = int(os.getenv("MIN_SPARSE_POINTS", "8000"))
 MIN_SPLAT_COUNT = int(os.getenv("MIN_SPLAT_COUNT", "25000"))
+MIN_SCENE_FRAMES = int(os.getenv("MIN_SCENE_FRAMES", "45"))
+MAX_SCENES_PER_TOUR = int(os.getenv("MAX_SCENES_PER_TOUR", "8"))
 SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "16384"))
 SIFT_PEAK_THRESHOLD = os.getenv("SIFT_PEAK_THRESHOLD", "0.002")
 SIFT_EDGE_THRESHOLD = os.getenv("SIFT_EDGE_THRESHOLD", "10")
@@ -38,12 +43,15 @@ class ReconstructionQualityError(RuntimeError):
 
 
 def run(cmd, cwd=None):
-    print("$", " ".join(str(c) for c in cmd), flush=True)
+    run_cmd = [str(c) for c in cmd]
     env = os.environ.copy()
-    if cmd and cmd[0] == "colmap":
+    if run_cmd and run_cmd[0] == "colmap":
         env["QT_QPA_PLATFORM"] = "offscreen"
-        env.setdefault("DISPLAY", "")
-    subprocess.run(cmd, cwd=cwd, env=env, check=True)
+        env.pop("DISPLAY", None)
+        if shutil.which("xvfb-run"):
+            run_cmd = ["xvfb-run", "-a", "--server-args=-screen 0 1280x1024x24", *run_cmd]
+    print("$", " ".join(str(c) for c in run_cmd), flush=True)
+    subprocess.run(run_cmd, cwd=cwd, env=env, check=True)
 
 
 def db():
@@ -192,6 +200,14 @@ def download_video(url, out_path):
                     f.write(chunk)
 
 
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def extract_frames(video_path, images_dir, pattern="frame_%06d.jpg"):
     images_dir.mkdir(parents=True, exist_ok=True)
     vf = f"fps={FRAME_RATE},scale='min({MAX_IMAGE_SIZE},iw)':-2,setsar=1"
@@ -209,15 +225,69 @@ def extract_frames(video_path, images_dir, pattern="frame_%06d.jpg"):
     ])
 
 
-def extract_video_set(video_urls, work_dir, images_dir):
-    video_count = len(video_urls)
-    for index, video_url in enumerate(video_urls, start=1):
+def extract_video_set(video_items, work_dir, images_dir):
+    video_count = len(video_items)
+    seen_hashes = set()
+    extracted = 0
+    for index, item in enumerate(video_items, start=1):
+        video_url = item["videoUrl"]
         video_path = work_dir / f"input_video_{index:03d}"
         print(f"Downloading clip {index}/{video_count}", flush=True)
         download_video(video_url, video_path)
-        update_pattern = f"clip{index:03d}_frame_%06d.jpg"
+        content_hash = file_sha256(video_path)
+        if content_hash in seen_hashes:
+            print(f"Skipping duplicate clip {index}/{video_count}", flush=True)
+            continue
+        seen_hashes.add(content_hash)
+        extracted += 1
+        update_pattern = f"clip{extracted:03d}_frame_%06d.jpg"
         print(f"Extracting frames from clip {index}/{video_count}", flush=True)
         extract_frames(video_path, images_dir, update_pattern)
+
+
+def scene_key_from_video(item):
+    name = str(item.get("originalName") or item.get("name") or "").strip()
+    if not name:
+        return "main"
+
+    stem = Path(name).stem.lower()
+    stem = re.sub(r"[-_\s]*angle[-_\s]*\d+$", "", stem)
+    stem = re.sub(r"[-_\s]*(clip|video|take)[-_\s]*\d+$", "", stem)
+    stem = re.sub(r"[^a-z0-9]+", "-", stem).strip("-")
+    return stem or "main"
+
+
+def title_from_scene_key(key):
+    return " ".join(part.capitalize() for part in str(key or "Area").split("-") if part) or "Area"
+
+
+def group_video_items(video_items):
+    groups = []
+    by_key = {}
+
+    for item in video_items:
+        key = scene_key_from_video(item)
+        if key not in by_key:
+            group = {
+                "key": key,
+                "title": title_from_scene_key(key),
+                "videos": [],
+            }
+            by_key[key] = group
+            groups.append(group)
+        by_key[key]["videos"].append(item)
+
+    # A single clip rarely has enough parallax for a reliable 3D reconstruction.
+    # If every clip has a different name, keep them together instead of creating
+    # many weak one-video scenes.
+    if len(groups) > 1 and all(len(group["videos"]) == 1 for group in groups):
+        return [{"key": "main", "title": "Property", "videos": video_items}]
+
+    reliable_groups = [group for group in groups if len(group["videos"]) > 1]
+    if reliable_groups:
+        return reliable_groups[:MAX_SCENES_PER_TOUR]
+
+    return groups[:MAX_SCENES_PER_TOUR]
 
 
 def run_colmap(images_dir, work_dir):
@@ -361,15 +431,18 @@ def assert_reconstruction_quality(frame_count, stats, splat_count):
     registered_images = int(stats.get("registeredImages") or 0)
     sparse_points = int(stats.get("sparsePoints") or 0)
     registered_ratio = registered_images / frame_count if frame_count else 0
+    min_registered = min(MIN_REGISTERED_IMAGES, max(35, int(frame_count * 0.22)))
+    min_sparse_points = min(MIN_SPARSE_POINTS, max(2500, int(frame_count * 30)))
+    min_splat_count = min(MIN_SPLAT_COUNT, max(12000, int(frame_count * 120)))
 
     failures = []
-    if registered_images < MIN_REGISTERED_IMAGES:
+    if registered_images < min_registered:
         failures.append(f"only {registered_images} usable frames")
     if registered_ratio < MIN_REGISTERED_IMAGE_RATIO:
         failures.append(f"only {registered_ratio:.0%} of frames aligned")
-    if sparse_points < MIN_SPARSE_POINTS:
+    if sparse_points < min_sparse_points:
         failures.append(f"only {sparse_points} stable scene points")
-    if splat_count < MIN_SPLAT_COUNT:
+    if splat_count < min_splat_count:
         failures.append(f"only {splat_count} render points")
 
     if failures:
@@ -385,6 +458,42 @@ def assert_reconstruction_quality(frame_count, stats, splat_count):
         "registeredImageRatio": registered_ratio,
         "sparsePoints": sparse_points,
         "splatCount": splat_count,
+    }
+
+
+def process_scene(conn, job, scene, base_work_dir, progress_start, progress_end):
+    scene_dir = base_work_dir / f"scene-{scene['key']}"
+    images_dir = scene_dir / "images"
+    output_path = scene_dir / "tour.ply"
+    scene_dir.mkdir(parents=True, exist_ok=True)
+
+    update_job(conn, job["id"], progress=progress_start)
+    extract_video_set(scene["videos"], scene_dir, images_dir)
+    frame_count = count_extracted_frames(images_dir)
+    if frame_count < MIN_SCENE_FRAMES:
+        raise ReconstructionQualityError(
+            f"{scene['title']} does not have enough usable video frames for a reliable 3D tour."
+        )
+
+    update_job(conn, job["id"], progress=progress_start + int((progress_end - progress_start) * 0.25))
+    model_dir = run_colmap(images_dir, scene_dir)
+    model_stats = analyze_colmap_model(model_dir, scene_dir)
+
+    update_job(conn, job["id"], progress=progress_start + int((progress_end - progress_start) * 0.7))
+    run_opensplat(model_dir, images_dir, output_path)
+    splat_count = read_ply_vertex_count(output_path)
+    quality = assert_reconstruction_quality(frame_count, model_stats, splat_count)
+
+    update_job(conn, job["id"], progress=progress_end)
+    file_url = upload_result(output_path)
+
+    return {
+        "key": scene["key"],
+        "title": scene["title"],
+        "fileUrl": file_url,
+        "format": "ply",
+        "videoCount": len(scene["videos"]),
+        "quality": quality,
     }
 
 
@@ -417,18 +526,23 @@ def upload_result(path):
     return supabase.storage.from_(SUPABASE_STORAGE_BUCKET).get_public_url(object_path)
 
 
-def save_virtual_tour(conn, job, file_url, output_format, quality):
+def save_virtual_tour(conn, job, scenes, skipped_scenes=None):
     request_payload = job.get("request_payload") or {}
+    primary_scene = scenes[0]
     payload = {
         "type": "splat3d",
-        "fileUrl": file_url,
-        "format": output_format,
+        "fileUrl": primary_scene["fileUrl"],
+        "format": primary_scene["format"],
+        "alphaRemovalThreshold": 8,
         "sourceType": "original",
         "generatedFrom": request_payload.get("captureType") or "iphone_video",
         "jobId": str(job["id"]),
         "videoCount": request_payload.get("videoCount") or 1,
+        "sceneCount": len(scenes),
+        "scenes": scenes,
+        "skippedScenes": skipped_scenes or [],
         "quality": {
-            **quality,
+            **primary_scene["quality"],
             "profile": "validated",
         },
     }
@@ -470,53 +584,70 @@ def process_job(conn, job):
     request_payload = job["request_payload"] or {}
     videos = request_payload.get("videos")
     if isinstance(videos, list) and videos:
-        video_urls = [
-            item.get("videoUrl") or item.get("url")
-            for item in sorted(
-                [item for item in videos if isinstance(item, dict)],
-                key=lambda item: int(item.get("index") or 0),
-            )
-        ]
-        video_urls = [url for url in video_urls if url]
+        video_items = []
+        for item in sorted(
+            [item for item in videos if isinstance(item, dict)],
+            key=lambda item: int(item.get("index") or 0),
+        ):
+            video_url = item.get("videoUrl") or item.get("url")
+            if not video_url:
+                continue
+            video_items.append({
+                "videoUrl": video_url,
+                "originalName": item.get("originalName") or item.get("name") or "",
+            })
     else:
         video_url = request_payload.get("videoUrl")
-        video_urls = [video_url] if video_url else []
+        video_items = [{
+            "videoUrl": video_url,
+            "originalName": request_payload.get("originalName") or "",
+        }] if video_url else []
 
-    if not video_urls:
+    if not video_items:
         raise RuntimeError("Job is missing request_payload.videoUrl or videos[].videoUrl.")
 
     with tempfile.TemporaryDirectory(prefix="video-3d-tour-") as tmp:
         work_dir = Path(tmp)
-        images_dir = work_dir / "images"
-        output_path = work_dir / "tour.ply"
+        scene_groups = group_video_items(video_items)
+        scenes = []
+        skipped_scenes = []
+        span = max(1, int(82 / max(1, len(scene_groups))))
 
-        update_job(conn, job["id"], progress=5)
-        extract_video_set(video_urls, work_dir, images_dir)
+        for index, scene in enumerate(scene_groups):
+            start = 5 + index * span
+            end = min(87, start + span)
+            print(
+                f"Processing scene {index + 1}/{len(scene_groups)}: {scene['title']}",
+                flush=True,
+            )
+            try:
+                scenes.append(process_scene(conn, job, scene, work_dir, start, end))
+            except Exception as exc:
+                skipped_scenes.append({
+                    "key": scene["key"],
+                    "title": scene["title"],
+                    "error": str(exc),
+                })
+                print(f"Scene skipped: {scene['title']}: {exc}", flush=True)
 
-        update_job(conn, job["id"], progress=15)
-        frame_count = count_extracted_frames(images_dir)
-
-        update_job(conn, job["id"], progress=35)
-        model_dir = run_colmap(images_dir, work_dir)
-        model_stats = analyze_colmap_model(model_dir, work_dir)
-
-        update_job(conn, job["id"], progress=70)
-        run_opensplat(model_dir, images_dir, output_path)
-        splat_count = read_ply_vertex_count(output_path)
-        quality = assert_reconstruction_quality(frame_count, model_stats, splat_count)
-
-        update_job(conn, job["id"], progress=88)
-        file_url = upload_result(output_path)
+        if not scenes:
+            raise ReconstructionQualityError("No reliable 3D scenes could be created from the uploaded videos.")
 
         update_job(conn, job["id"], progress=95)
-        tour_id = save_virtual_tour(conn, job, file_url, "ply", quality)
+        tour_id = save_virtual_tour(conn, job, scenes, skipped_scenes)
 
         update_job(
             conn,
             job["id"],
             status="succeeded",
             progress=100,
-            result={"tourId": str(tour_id), "fileUrl": file_url, "quality": quality},
+            result={
+                "tourId": str(tour_id),
+                "fileUrl": scenes[0]["fileUrl"],
+                "sceneCount": len(scenes),
+                "scenes": scenes,
+                "skippedScenes": skipped_scenes,
+            },
         )
 
 

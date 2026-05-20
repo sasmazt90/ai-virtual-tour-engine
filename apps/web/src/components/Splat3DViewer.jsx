@@ -17,6 +17,12 @@ function safeVector(raw, fallback) {
   return next.every((v) => Number.isFinite(v)) ? next : fallback;
 }
 
+function safeNumber(raw, fallback, min, max) {
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
+}
+
 async function fitCameraToScene(viewer) {
   const splatMesh =
     typeof viewer?.getSplatMesh === "function" ? viewer.getSplatMesh() : null;
@@ -88,14 +94,35 @@ async function fitCameraToScene(viewer) {
 export default function Splat3DViewer({ tourPayload, height }) {
   const rootRef = useRef(null);
   const viewerRef = useRef(null);
+  const [activeSceneIndex, setActiveSceneIndex] = useState(0);
   const [status, setStatus] = useState("loading");
   const [error, setError] = useState("");
 
   const payload = useMemo(() => tourPayload || {}, [tourPayload]);
-  const fileUrl = payload.fileUrl || payload.url || payload.src || "";
-  const format = payload.format || "";
-  const camera = payload.camera || {};
+  const scenes = useMemo(() => {
+    const list = Array.isArray(payload.scenes)
+      ? payload.scenes.filter((scene) => scene?.fileUrl || scene?.url || scene?.src)
+      : [];
+
+    if (list.length) return list;
+    return [
+      {
+        title: "Original tour",
+        fileUrl: payload.fileUrl || payload.url || payload.src || "",
+        format: payload.format || "",
+        camera: payload.camera || {},
+      },
+    ];
+  }, [payload]);
+  const activeScene = scenes[Math.min(activeSceneIndex, scenes.length - 1)] || scenes[0] || {};
+  const fileUrl = activeScene.fileUrl || activeScene.url || activeScene.src || "";
+  const format = activeScene.format || payload.format || "";
+  const camera = activeScene.camera || payload.camera || {};
   const containerHeight = height ?? 480;
+
+  useEffect(() => {
+    setActiveSceneIndex(0);
+  }, [payload]);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,7 +131,7 @@ export default function Splat3DViewer({ tourPayload, height }) {
       const root = rootRef.current;
       if (!root || !fileUrl) {
         setStatus("error");
-        setError("No 3D scan file is attached to this tour.");
+        setError("No 3D tour file is attached to this tour.");
         return;
       }
 
@@ -127,7 +154,10 @@ export default function Splat3DViewer({ tourPayload, height }) {
           sharedMemoryForWorkers: false,
           gpuAcceleratedSort: false,
           integerBasedSort: false,
-          ignoreDevicePixelRatio: true,
+          ignoreDevicePixelRatio: false,
+          optimizeSplatData: true,
+          inMemoryCompressionLevel: 1,
+          focalAdjustment: 1.15,
           sphericalHarmonicsDegree: 0,
         });
 
@@ -136,7 +166,12 @@ export default function Splat3DViewer({ tourPayload, height }) {
         const sceneOptions = {
           showLoadingUI: true,
           progressiveLoad: false,
-          splatAlphaRemovalThreshold: 0,
+          splatAlphaRemovalThreshold: safeNumber(
+            activeScene.alphaRemovalThreshold ?? payload.alphaRemovalThreshold,
+            8,
+            1,
+            40,
+          ),
           position: [0, 0, 0],
           rotation: [0, 0, 0, 1],
           scale: [1, 1, 1],
@@ -152,7 +187,7 @@ export default function Splat3DViewer({ tourPayload, height }) {
         const splatCount = await fitCameraToScene(viewer);
 
         if (!Number.isFinite(splatCount) || splatCount <= 0) {
-          throw new Error("The 3D scan file did not contain renderable points.");
+          throw new Error("The 3D tour file did not contain renderable points.");
         }
 
         if (cancelled) {
@@ -169,7 +204,7 @@ export default function Splat3DViewer({ tourPayload, height }) {
           setError(
             err instanceof Error
               ? err.message
-              : "Could not load the 3D scan.",
+              : "Could not load the 3D tour.",
           );
         }
       }
@@ -209,6 +244,25 @@ export default function Splat3DViewer({ tourPayload, height }) {
       {status === "ready" ? (
         <div className="pointer-events-none absolute left-3 bottom-3 rounded-md bg-black/55 px-3 py-2 text-xs text-white font-jetbrains-mono">
           Drag to orbit - right-drag to pan - scroll to zoom
+        </div>
+      ) : null}
+
+      {status === "ready" && scenes.length > 1 ? (
+        <div className="absolute left-3 top-3 flex max-w-[calc(100%-1.5rem)] flex-wrap gap-2">
+          {scenes.map((scene, index) => (
+            <button
+              key={`${scene.key || scene.title || index}-${index}`}
+              type="button"
+              onClick={() => setActiveSceneIndex(index)}
+              className={`rounded-md px-3 py-2 text-xs font-medium font-jetbrains-mono shadow-sm ${
+                index === activeSceneIndex
+                  ? "bg-white text-gray-900"
+                  : "bg-black/55 text-white hover:bg-black/70"
+              }`}
+            >
+              {scene.title || `Area ${index + 1}`}
+            </button>
+          ))}
         </div>
       ) : null}
     </div>
