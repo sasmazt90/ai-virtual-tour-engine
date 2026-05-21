@@ -826,6 +826,18 @@ def process_job(conn, job):
                 print(f"Scene skipped: {scene['title']}: {exc}", flush=True)
 
         if not scenes:
+            update_job(
+                conn,
+                job["id"],
+                result={
+                    "sceneCount": 0,
+                    "skippedScenes": skipped_scenes,
+                    "quality": {
+                        "profile": "rejected",
+                        "reason": "no_reliable_scenes",
+                    },
+                },
+            )
             raise ReconstructionQualityError("No reliable 3D scenes could be created from the uploaded videos.")
 
         update_job(conn, job["id"], progress=95)
