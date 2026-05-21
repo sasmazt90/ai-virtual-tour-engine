@@ -1275,7 +1275,7 @@ def process_job(conn, job):
 
 
 def main():
-    once_job_id = os.getenv("PROCESS_JOB_ID")
+    once_job_id = os.getenv("PROCESS_JOB_ID") or os.getenv("RUN_ONCE_JOB_ID")
     with db() as conn:
       while True:
           job = claim_job(conn, once_job_id)
