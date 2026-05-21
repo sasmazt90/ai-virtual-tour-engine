@@ -41,7 +41,7 @@ PLY_MAX_SCALE = float(os.getenv("PLY_MAX_SCALE", "0.065"))
 PLY_OUTLIER_QUANTILE_LOW = float(os.getenv("PLY_OUTLIER_QUANTILE_LOW", "0.02"))
 PLY_OUTLIER_QUANTILE_HIGH = float(os.getenv("PLY_OUTLIER_QUANTILE_HIGH", "0.98"))
 MIN_SCENE_FRAMES = int(os.getenv("MIN_SCENE_FRAMES", "45"))
-MAX_SCENE_FRAMES = int(os.getenv("MAX_SCENE_FRAMES", "220"))
+MAX_SCENE_FRAMES = int(os.getenv("MAX_SCENE_FRAMES", "180"))
 FRAME_QUALITY_DROP_RATIO = float(os.getenv("FRAME_QUALITY_DROP_RATIO", "0.12"))
 MAX_SCENES_PER_TOUR = int(os.getenv("MAX_SCENES_PER_TOUR", "8"))
 SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "8192"))
@@ -507,7 +507,13 @@ def limit_scene_frames(images_dir, max_frames=MAX_SCENE_FRAMES):
         if frame not in keep:
             frame.unlink(missing_ok=True)
 
-    kept_count = len(keep)
+    ordered_keep = sorted(keep, key=lambda path: (clip_key_from_frame(path), path.name))
+    for index, frame in enumerate(ordered_keep, start=1):
+        frame.rename(images_dir / f"selected_{index:06d}.jpg")
+    for index, frame in enumerate(sorted(images_dir.glob("selected_*.jpg")), start=1):
+        frame.rename(images_dir / f"frame_{index:06d}.jpg")
+
+    kept_count = len(ordered_keep)
     print(
         f"Selected {kept_count} balanced frames from {frame_count} extracted frames across {clip_count} clips",
         flush=True,
