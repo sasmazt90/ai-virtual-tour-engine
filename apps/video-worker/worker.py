@@ -41,7 +41,8 @@ PLY_MAX_SCALE = float(os.getenv("PLY_MAX_SCALE", "0.065"))
 PLY_OUTLIER_QUANTILE_LOW = float(os.getenv("PLY_OUTLIER_QUANTILE_LOW", "0.02"))
 PLY_OUTLIER_QUANTILE_HIGH = float(os.getenv("PLY_OUTLIER_QUANTILE_HIGH", "0.98"))
 MIN_SCENE_FRAMES = int(os.getenv("MIN_SCENE_FRAMES", "45"))
-MAX_SCENE_FRAMES = int(os.getenv("MAX_SCENE_FRAMES", "360"))
+MAX_SCENE_FRAMES = int(os.getenv("MAX_SCENE_FRAMES", "220"))
+FRAME_QUALITY_DROP_RATIO = float(os.getenv("FRAME_QUALITY_DROP_RATIO", "0.12"))
 MAX_SCENES_PER_TOUR = int(os.getenv("MAX_SCENES_PER_TOUR", "8"))
 SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "8192"))
 SIFT_PEAK_THRESHOLD = os.getenv("SIFT_PEAK_THRESHOLD", "0.002")
@@ -454,18 +455,53 @@ def count_extracted_frames(images_dir):
     return sum(1 for _ in images_dir.glob("*.jpg"))
 
 
+def clip_key_from_frame(frame):
+    match = re.match(r"clip(\d+)_frame_\d+\.jpg$", frame.name)
+    return match.group(1) if match else "main"
+
+
+def select_representative_frames(frames, target_count):
+    if target_count <= 0 or len(frames) <= target_count:
+        return set(frames)
+
+    weighted_frames = [
+        (frame, frame.stat().st_size if frame.exists() else 0)
+        for frame in frames
+    ]
+    weighted_frames.sort(key=lambda item: item[1])
+
+    drop_count = int(len(weighted_frames) * FRAME_QUALITY_DROP_RATIO)
+    candidates = [frame for frame, _ in weighted_frames[drop_count:]] or frames
+    candidates = sorted(candidates)
+
+    keep = set()
+    for index in range(target_count):
+        start = round(index * len(candidates) / target_count)
+        end = round((index + 1) * len(candidates) / target_count)
+        bucket = candidates[start:max(start + 1, end)]
+        keep.add(max(bucket, key=lambda path: path.stat().st_size if path.exists() else 0))
+    return keep
+
+
 def limit_scene_frames(images_dir, max_frames=MAX_SCENE_FRAMES):
     frames = sorted(images_dir.glob("*.jpg"))
     frame_count = len(frames)
     if max_frames <= 0 or frame_count <= max_frames:
         return frame_count
 
+    by_clip = {}
+    for frame in frames:
+        by_clip.setdefault(clip_key_from_frame(frame), []).append(frame)
+
+    clip_count = max(1, len(by_clip))
+    base_per_clip = max(1, max_frames // clip_count)
+    remainder = max_frames % clip_count
+
     keep = set()
-    for index in range(max_frames):
-        start = round(index * frame_count / max_frames)
-        end = round((index + 1) * frame_count / max_frames)
-        bucket = frames[start:max(start + 1, end)]
-        keep.add(max(bucket, key=lambda path: path.stat().st_size if path.exists() else 0))
+    for clip_index, clip_key in enumerate(sorted(by_clip.keys())):
+        clip_frames = sorted(by_clip[clip_key])
+        target = min(len(clip_frames), base_per_clip + (1 if clip_index < remainder else 0))
+        keep.update(select_representative_frames(clip_frames, target))
 
     for frame in frames:
         if frame not in keep:
@@ -473,7 +509,7 @@ def limit_scene_frames(images_dir, max_frames=MAX_SCENE_FRAMES):
 
     kept_count = len(keep)
     print(
-        f"Reduced scene frames from {frame_count} to {kept_count} for faster, more stable reconstruction",
+        f"Selected {kept_count} balanced frames from {frame_count} extracted frames across {clip_count} clips",
         flush=True,
     )
     return kept_count
