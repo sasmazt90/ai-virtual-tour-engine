@@ -79,6 +79,21 @@ def vector_norm(values):
     return math.sqrt(sum(float(v) * float(v) for v in values))
 
 
+def matrix_transpose_multiply(matrix, vector):
+    return [
+        sum(matrix[row][col] * vector[row] for row in range(3))
+        for col in range(3)
+    ]
+
+
+def vector_add(left, right):
+    return [float(left[i]) + float(right[i]) for i in range(3)]
+
+
+def vector_scale(values, scale):
+    return [float(value) * scale for value in values]
+
+
 def quaternion_to_rotation(qw, qx, qy, qz):
     norm = math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz)
     if norm <= 0:
@@ -440,6 +455,7 @@ def analyze_colmap_model(model_dir, work_dir):
     registered_images = 0
     sparse_points = 0
     camera_centers = []
+    camera_poses = []
     point_errors = []
     track_lengths = []
 
@@ -455,7 +471,16 @@ def analyze_colmap_model(model_dir, work_dir):
                     translation = [float(parts[i]) for i in range(5, 8)]
                     rotation = quaternion_to_rotation(qw, qx, qy, qz)
                     if rotation:
-                        camera_centers.append(camera_center(rotation, translation))
+                        center = camera_center(rotation, translation)
+                        forward = matrix_transpose_multiply(rotation, [0, 0, 1])
+                        up = matrix_transpose_multiply(rotation, [0, -1, 0])
+                        camera_centers.append(center)
+                        camera_poses.append({
+                            "position": center,
+                            "forward": forward,
+                            "up": up,
+                            "image": parts[9] if len(parts) > 9 else "",
+                        })
                 except ValueError:
                     pass
 
@@ -487,12 +512,24 @@ def analyze_colmap_model(model_dir, work_dir):
         camera_baseline_p95 = quantile(distances, 0.95)
         camera_baseline_max = max(distances) if distances else 0.0
 
+    viewer_camera = None
+    if camera_poses:
+        representative = camera_poses[len(camera_poses) // 2]
+        target_distance = max(0.35, min(4.0, camera_baseline_p95 * 0.75 or camera_baseline_max * 0.5 or 1.0))
+        viewer_camera = {
+            "position": representative["position"],
+            "lookAt": vector_add(representative["position"], vector_scale(representative["forward"], target_distance)),
+            "up": representative["up"],
+            "sourceImage": representative["image"],
+        }
+
     return {
         "registeredImages": registered_images,
         "sparsePoints": sparse_points,
         "cameraSpan": camera_spans,
         "cameraBaselineP95": camera_baseline_p95,
         "cameraBaselineMax": camera_baseline_max,
+        "viewerCamera": viewer_camera,
         "meanTrackLength": sum(track_lengths) / len(track_lengths) if track_lengths else 0,
         "pointErrorP75": quantile(point_errors, 0.75),
     }
@@ -869,6 +906,7 @@ def process_scene(conn, job, scene, base_work_dir, progress_start, progress_end)
         "title": scene["title"],
         "fileUrl": file_url,
         "format": "ply",
+        "camera": model_stats.get("viewerCamera") or {},
         "videoCount": len(scene["videos"]),
         "quality": quality,
     }

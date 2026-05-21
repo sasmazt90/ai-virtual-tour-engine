@@ -23,7 +23,15 @@ function safeNumber(raw, fallback, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-async function fitCameraToScene(viewer) {
+function isFiniteVector(raw) {
+  return (
+    Array.isArray(raw) &&
+    raw.length >= 3 &&
+    raw.slice(0, 3).every((value) => Number.isFinite(Number(value)))
+  );
+}
+
+async function fitCameraToScene(viewer, preferredCamera) {
   const splatMesh =
     typeof viewer?.getSplatMesh === "function" ? viewer.getSplatMesh() : null;
   const count =
@@ -74,6 +82,33 @@ async function fitCameraToScene(viewer) {
   const fov = viewer.camera?.fov ? (viewer.camera.fov * Math.PI) / 180 : Math.PI / 4;
   const distance = Math.max(maxDim / (2 * Math.tan(fov / 2)), 2) * 1.65;
   const viewDirection = new THREE.Vector3(0.35, -1, 0.35).normalize();
+  const hasPreferredCamera =
+    isFiniteVector(preferredCamera?.position) &&
+    isFiniteVector(preferredCamera?.lookAt);
+
+  if (hasPreferredCamera) {
+    const position = new THREE.Vector3(
+      ...preferredCamera.position.slice(0, 3).map(Number),
+    );
+    const target = new THREE.Vector3(
+      ...preferredCamera.lookAt.slice(0, 3).map(Number),
+    );
+
+    if (viewer.camera) {
+      viewer.camera.near = Math.max(0.01, distance / 700);
+      viewer.camera.far = Math.max(1000, distance * 120);
+      viewer.camera.position.copy(position);
+      viewer.camera.lookAt(target);
+      viewer.camera.updateProjectionMatrix?.();
+    }
+
+    if (viewer.controls) {
+      viewer.controls.target.copy(target);
+      viewer.controls.update?.();
+    }
+
+    return count;
+  }
 
   if (viewer.camera) {
     viewer.camera.near = Math.max(0.01, distance / 500);
@@ -184,7 +219,7 @@ export default function Splat3DViewer({ tourPayload, height }) {
 
         await viewer.addSplatScene(fileUrl, sceneOptions);
 
-        const splatCount = await fitCameraToScene(viewer);
+        const splatCount = await fitCameraToScene(viewer, camera);
 
         if (!Number.isFinite(splatCount) || splatCount <= 0) {
           throw new Error("The 3D tour file did not contain renderable points.");
