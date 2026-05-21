@@ -22,7 +22,7 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "uploads")
 OPEN_SPLAT_BIN = os.getenv("OPEN_SPLAT_BIN", "opensplat")
 WORKER_POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "10"))
-FRAME_RATE = float(os.getenv("FRAME_RATE", "6"))
+FRAME_RATE = float(os.getenv("FRAME_RATE", "4"))
 MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1600"))
 SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "10000"))
 SPLAT_DENSIFY_GRAD_THRESH = os.getenv("SPLAT_DENSIFY_GRAD_THRESH", "0.00012")
@@ -44,11 +44,11 @@ PLY_OUTLIER_QUANTILE_HIGH = float(os.getenv("PLY_OUTLIER_QUANTILE_HIGH", "0.98")
 MIN_SCENE_FRAMES = int(os.getenv("MIN_SCENE_FRAMES", "45"))
 MAX_SCENE_FRAMES = int(os.getenv("MAX_SCENE_FRAMES", "360"))
 MAX_SCENES_PER_TOUR = int(os.getenv("MAX_SCENES_PER_TOUR", "8"))
-SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "32768"))
-SIFT_PEAK_THRESHOLD = os.getenv("SIFT_PEAK_THRESHOLD", "0.0015")
+SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "8192"))
+SIFT_PEAK_THRESHOLD = os.getenv("SIFT_PEAK_THRESHOLD", "0.002")
 SIFT_EDGE_THRESHOLD = os.getenv("SIFT_EDGE_THRESHOLD", "10")
-SEQUENTIAL_MATCH_OVERLAP = int(os.getenv("SEQUENTIAL_MATCH_OVERLAP", "80"))
-EXHAUSTIVE_MATCH_MAX_FRAMES = int(os.getenv("EXHAUSTIVE_MATCH_MAX_FRAMES", "420"))
+SEQUENTIAL_MATCH_OVERLAP = int(os.getenv("SEQUENTIAL_MATCH_OVERLAP", "20"))
+EXHAUSTIVE_MATCH_MAX_FRAMES = int(os.getenv("EXHAUSTIVE_MATCH_MAX_FRAMES", "220"))
 COLMAP_USE_GPU = os.getenv("COLMAP_USE_GPU", "0")
 
 
@@ -397,8 +397,6 @@ def run_colmap(images_dir, work_dir, heartbeat=None):
         str(db_path),
         "--SiftMatching.use_gpu",
         COLMAP_USE_GPU,
-        "--SiftMatching.guided_matching",
-        "1",
         "--SequentialMatching.overlap",
         str(SEQUENTIAL_MATCH_OVERLAP),
     ], heartbeat=heartbeat)
