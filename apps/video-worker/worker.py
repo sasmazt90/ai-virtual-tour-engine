@@ -22,33 +22,33 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "uploads")
 OPEN_SPLAT_BIN = os.getenv("OPEN_SPLAT_BIN", "opensplat")
 WORKER_POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "10"))
-FRAME_RATE = float(os.getenv("FRAME_RATE", "4"))
+FRAME_RATE = float(os.getenv("FRAME_RATE", "6"))
 MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1600"))
-SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "6000"))
-SPLAT_DENSIFY_GRAD_THRESH = os.getenv("SPLAT_DENSIFY_GRAD_THRESH", "0.00015")
-MIN_REGISTERED_IMAGES = int(os.getenv("MIN_REGISTERED_IMAGES", "80"))
-MIN_REGISTERED_IMAGE_RATIO = float(os.getenv("MIN_REGISTERED_IMAGE_RATIO", "0.35"))
-MIN_SPARSE_POINTS = int(os.getenv("MIN_SPARSE_POINTS", "8000"))
-MIN_SPLAT_COUNT = int(os.getenv("MIN_SPLAT_COUNT", "25000"))
+SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "10000"))
+SPLAT_DENSIFY_GRAD_THRESH = os.getenv("SPLAT_DENSIFY_GRAD_THRESH", "0.00012")
+MIN_REGISTERED_IMAGES = int(os.getenv("MIN_REGISTERED_IMAGES", "90"))
+MIN_REGISTERED_IMAGE_RATIO = float(os.getenv("MIN_REGISTERED_IMAGE_RATIO", "0.5"))
+MIN_SPARSE_POINTS = int(os.getenv("MIN_SPARSE_POINTS", "14000"))
+MIN_SPLAT_COUNT = int(os.getenv("MIN_SPLAT_COUNT", "70000"))
 MIN_CAMERA_BASELINE = float(os.getenv("MIN_CAMERA_BASELINE", "0.18"))
 MIN_CAMERA_SPREAD_RATIO = float(os.getenv("MIN_CAMERA_SPREAD_RATIO", "0.04"))
 MIN_OPAQUE_SPLAT_RATIO = float(os.getenv("MIN_OPAQUE_SPLAT_RATIO", "0.18"))
-MAX_SPLAT_SCALE_P95 = float(os.getenv("MAX_SPLAT_SCALE_P95", "0.08"))
-MAX_SPLAT_OUTLIER_RATIO = float(os.getenv("MAX_SPLAT_OUTLIER_RATIO", "4.5"))
-MAX_OUTPUT_SPLATS = int(os.getenv("MAX_OUTPUT_SPLATS", "140000"))
-MAX_OUTPUT_FILE_MB = float(os.getenv("MAX_OUTPUT_FILE_MB", "42"))
-PLY_MIN_OPACITY = float(os.getenv("PLY_MIN_OPACITY", "0.35"))
-PLY_MAX_SCALE = float(os.getenv("PLY_MAX_SCALE", "0.08"))
+MAX_SPLAT_SCALE_P95 = float(os.getenv("MAX_SPLAT_SCALE_P95", "0.065"))
+MAX_SPLAT_OUTLIER_RATIO = float(os.getenv("MAX_SPLAT_OUTLIER_RATIO", "3.5"))
+MAX_OUTPUT_SPLATS = int(os.getenv("MAX_OUTPUT_SPLATS", "220000"))
+MAX_OUTPUT_FILE_MB = float(os.getenv("MAX_OUTPUT_FILE_MB", "72"))
+PLY_MIN_OPACITY = float(os.getenv("PLY_MIN_OPACITY", "0.32"))
+PLY_MAX_SCALE = float(os.getenv("PLY_MAX_SCALE", "0.065"))
 PLY_OUTLIER_QUANTILE_LOW = float(os.getenv("PLY_OUTLIER_QUANTILE_LOW", "0.02"))
 PLY_OUTLIER_QUANTILE_HIGH = float(os.getenv("PLY_OUTLIER_QUANTILE_HIGH", "0.98"))
 MIN_SCENE_FRAMES = int(os.getenv("MIN_SCENE_FRAMES", "45"))
-MAX_SCENE_FRAMES = int(os.getenv("MAX_SCENE_FRAMES", "220"))
+MAX_SCENE_FRAMES = int(os.getenv("MAX_SCENE_FRAMES", "360"))
 MAX_SCENES_PER_TOUR = int(os.getenv("MAX_SCENES_PER_TOUR", "8"))
-SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "16384"))
-SIFT_PEAK_THRESHOLD = os.getenv("SIFT_PEAK_THRESHOLD", "0.002")
+SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "32768"))
+SIFT_PEAK_THRESHOLD = os.getenv("SIFT_PEAK_THRESHOLD", "0.0015")
 SIFT_EDGE_THRESHOLD = os.getenv("SIFT_EDGE_THRESHOLD", "10")
-SEQUENTIAL_MATCH_OVERLAP = int(os.getenv("SEQUENTIAL_MATCH_OVERLAP", "40"))
-EXHAUSTIVE_MATCH_MAX_FRAMES = int(os.getenv("EXHAUSTIVE_MATCH_MAX_FRAMES", "120"))
+SEQUENTIAL_MATCH_OVERLAP = int(os.getenv("SEQUENTIAL_MATCH_OVERLAP", "80"))
+EXHAUSTIVE_MATCH_MAX_FRAMES = int(os.getenv("EXHAUSTIVE_MATCH_MAX_FRAMES", "420"))
 COLMAP_USE_GPU = os.getenv("COLMAP_USE_GPU", "0")
 
 
@@ -60,10 +60,12 @@ def run(cmd, cwd=None, heartbeat=None):
     run_cmd = [str(c) for c in cmd]
     env = os.environ.copy()
     if run_cmd and run_cmd[0] == "colmap":
-        env["QT_QPA_PLATFORM"] = "offscreen"
-        env.pop("DISPLAY", None)
         if shutil.which("xvfb-run"):
+            env["QT_QPA_PLATFORM"] = "xcb"
             run_cmd = ["xvfb-run", "-a", "--server-args=-screen 0 1280x1024x24", *run_cmd]
+        else:
+            env["QT_QPA_PLATFORM"] = "offscreen"
+            env.pop("DISPLAY", None)
     print("$", " ".join(str(c) for c in run_cmd), flush=True)
     process = subprocess.Popen(run_cmd, cwd=cwd, env=env)
     last_heartbeat = time.monotonic()
@@ -395,6 +397,8 @@ def run_colmap(images_dir, work_dir, heartbeat=None):
         str(db_path),
         "--SiftMatching.use_gpu",
         COLMAP_USE_GPU,
+        "--SiftMatching.guided_matching",
+        "1",
         "--SequentialMatching.overlap",
         str(SEQUENTIAL_MATCH_OVERLAP),
     ], heartbeat=heartbeat)
@@ -424,6 +428,10 @@ def run_colmap(images_dir, work_dir, heartbeat=None):
         "50",
         "--Mapper.abs_pose_min_num_inliers",
         "15",
+        "--Mapper.ba_refine_focal_length",
+        "1",
+        "--Mapper.ba_refine_extra_params",
+        "1",
     ], heartbeat=heartbeat)
 
     model_dirs = [path for path in sparse_dir.iterdir() if path.is_dir()]
@@ -454,11 +462,13 @@ def limit_scene_frames(images_dir, max_frames=MAX_SCENE_FRAMES):
     if max_frames <= 0 or frame_count <= max_frames:
         return frame_count
 
-    keep_indexes = {
-        round(index * (frame_count - 1) / (max_frames - 1))
-        for index in range(max_frames)
-    }
-    keep = {frames[index] for index in keep_indexes}
+    keep = set()
+    for index in range(max_frames):
+        start = round(index * frame_count / max_frames)
+        end = round((index + 1) * frame_count / max_frames)
+        bucket = frames[start:max(start + 1, end)]
+        keep.add(max(bucket, key=lambda path: path.stat().st_size if path.exists() else 0))
+
     for frame in frames:
         if frame not in keep:
             frame.unlink(missing_ok=True)
@@ -841,8 +851,11 @@ def assert_geometry_quality(frame_count, stats):
     camera_span = vector_norm(stats.get("cameraSpan") or [0, 0, 0])
     camera_spread_ratio = camera_baseline / max(camera_span, 0.001)
     registered_ratio = registered_images / frame_count if frame_count else 0
-    min_registered = min(MIN_REGISTERED_IMAGES, max(35, int(frame_count * 0.22)))
-    min_sparse_points = min(MIN_SPARSE_POINTS, max(2500, int(frame_count * 30)))
+    min_registered = min(
+        frame_count,
+        max(MIN_REGISTERED_IMAGES, int(frame_count * MIN_REGISTERED_IMAGE_RATIO)),
+    )
+    min_sparse_points = max(MIN_SPARSE_POINTS, int(frame_count * 80))
 
     failures = []
     if registered_images < min_registered:
@@ -878,7 +891,7 @@ def assert_reconstruction_quality(frame_count, stats, splat_stats):
     opaque_splat_ratio = float(splat_stats.get("opaqueSplatRatio") or 0)
     scale_p95 = float(splat_stats.get("scaleP95") or 0)
     outlier_ratio = float(splat_stats.get("outlierRatio") or 0)
-    min_splat_count = min(MIN_SPLAT_COUNT, max(12000, int(frame_count * 120)))
+    min_splat_count = max(MIN_SPLAT_COUNT, int(frame_count * 220))
 
     failures = []
     if splat_count < min_splat_count:
