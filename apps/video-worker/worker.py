@@ -1,8 +1,10 @@
 import json
 import hashlib
+import math
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import time
@@ -28,6 +30,11 @@ MIN_REGISTERED_IMAGES = int(os.getenv("MIN_REGISTERED_IMAGES", "80"))
 MIN_REGISTERED_IMAGE_RATIO = float(os.getenv("MIN_REGISTERED_IMAGE_RATIO", "0.35"))
 MIN_SPARSE_POINTS = int(os.getenv("MIN_SPARSE_POINTS", "8000"))
 MIN_SPLAT_COUNT = int(os.getenv("MIN_SPLAT_COUNT", "25000"))
+MIN_CAMERA_BASELINE = float(os.getenv("MIN_CAMERA_BASELINE", "0.18"))
+MIN_CAMERA_SPREAD_RATIO = float(os.getenv("MIN_CAMERA_SPREAD_RATIO", "0.04"))
+MIN_OPAQUE_SPLAT_RATIO = float(os.getenv("MIN_OPAQUE_SPLAT_RATIO", "0.18"))
+MAX_SPLAT_SCALE_P95 = float(os.getenv("MAX_SPLAT_SCALE_P95", "0.08"))
+MAX_SPLAT_OUTLIER_RATIO = float(os.getenv("MAX_SPLAT_OUTLIER_RATIO", "4.5"))
 MIN_SCENE_FRAMES = int(os.getenv("MIN_SCENE_FRAMES", "45"))
 MAX_SCENES_PER_TOUR = int(os.getenv("MAX_SCENES_PER_TOUR", "8"))
 SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "16384"))
@@ -52,6 +59,38 @@ def run(cmd, cwd=None):
             run_cmd = ["xvfb-run", "-a", "--server-args=-screen 0 1280x1024x24", *run_cmd]
     print("$", " ".join(str(c) for c in run_cmd), flush=True)
     subprocess.run(run_cmd, cwd=cwd, env=env, check=True)
+
+
+def quantile(values, q, fallback=0.0):
+    clean = sorted(v for v in values if isinstance(v, (int, float)) and math.isfinite(v))
+    if not clean:
+        return fallback
+    index = max(0, min(len(clean) - 1, int(len(clean) * q)))
+    return clean[index]
+
+
+def vector_norm(values):
+    return math.sqrt(sum(float(v) * float(v) for v in values))
+
+
+def quaternion_to_rotation(qw, qx, qy, qz):
+    norm = math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz)
+    if norm <= 0:
+        return None
+    qw, qx, qy, qz = qw / norm, qx / norm, qy / norm, qz / norm
+    return [
+        [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+        [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+        [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)],
+    ]
+
+
+def camera_center(rotation, translation):
+    # COLMAP stores world-to-camera pose. The camera center is -R^T * t.
+    return [
+        -sum(rotation[row][col] * translation[row] for row in range(3))
+        for col in range(3)
+    ]
 
 
 def db():
@@ -394,22 +433,62 @@ def analyze_colmap_model(model_dir, work_dir):
     points_txt = text_dir / "points3D.txt"
     registered_images = 0
     sparse_points = 0
+    camera_centers = []
+    point_errors = []
+    track_lengths = []
 
     if images_txt.exists():
         for line in images_txt.read_text(errors="ignore").splitlines():
             if line.startswith("#"):
                 continue
-            if ".jpg" in line.lower() or ".jpeg" in line.lower() or ".png" in line.lower():
+            parts = line.split()
+            if len(parts) >= 10 and (".jpg" in line.lower() or ".jpeg" in line.lower() or ".png" in line.lower()):
                 registered_images += 1
+                try:
+                    qw, qx, qy, qz = (float(parts[i]) for i in range(1, 5))
+                    translation = [float(parts[i]) for i in range(5, 8)]
+                    rotation = quaternion_to_rotation(qw, qx, qy, qz)
+                    if rotation:
+                        camera_centers.append(camera_center(rotation, translation))
+                except ValueError:
+                    pass
 
     if points_txt.exists():
         for line in points_txt.read_text(errors="ignore").splitlines():
             if line.strip() and not line.startswith("#"):
                 sparse_points += 1
+                parts = line.split()
+                if len(parts) >= 8:
+                    try:
+                        point_errors.append(float(parts[7]))
+                        # Tracks are stored as IMAGE_ID POINT2D_IDX pairs after
+                        # the first 8 fields.
+                        track_lengths.append(max(0, (len(parts) - 8) // 2))
+                    except ValueError:
+                        pass
+
+    camera_spans = [0.0, 0.0, 0.0]
+    camera_baseline_p95 = 0.0
+    camera_baseline_max = 0.0
+    if camera_centers:
+        axes = list(zip(*camera_centers))
+        camera_spans = [
+            quantile(list(axis), 0.95) - quantile(list(axis), 0.05)
+            for axis in axes
+        ]
+        first = camera_centers[0]
+        distances = [vector_norm([center[i] - first[i] for i in range(3)]) for center in camera_centers]
+        camera_baseline_p95 = quantile(distances, 0.95)
+        camera_baseline_max = max(distances) if distances else 0.0
 
     return {
         "registeredImages": registered_images,
         "sparsePoints": sparse_points,
+        "cameraSpan": camera_spans,
+        "cameraBaselineP95": camera_baseline_p95,
+        "cameraBaselineMax": camera_baseline_max,
+        "meanTrackLength": sum(track_lengths) / len(track_lengths) if track_lengths else 0,
+        "pointErrorP75": quantile(point_errors, 0.75),
     }
 
 
@@ -427,9 +506,111 @@ def read_ply_vertex_count(path):
     return 0
 
 
-def assert_reconstruction_quality(frame_count, stats, splat_count):
+def analyze_ply(path, sample_limit=80000):
+    with open(path, "rb") as f:
+        properties = []
+        vertex_count = 0
+        is_binary_little_endian = False
+        while True:
+            raw = f.readline()
+            if not raw:
+                break
+            line = raw.decode("utf-8", errors="ignore").strip()
+            if line == "format binary_little_endian 1.0":
+                is_binary_little_endian = True
+            elif line.startswith("element vertex "):
+                try:
+                    vertex_count = int(line.split()[-1])
+                except ValueError:
+                    vertex_count = 0
+            elif line.startswith("property float "):
+                properties.append(line.split()[-1])
+            elif line == "end_header":
+                break
+
+        if not is_binary_little_endian or not vertex_count or not properties:
+            return {"splatCount": vertex_count}
+
+        required = {"x", "y", "z", "opacity", "scale_0", "scale_1", "scale_2"}
+        if not required.issubset(set(properties)):
+            return {"splatCount": vertex_count}
+
+        prop_index = {name: index for index, name in enumerate(properties)}
+        stride = len(properties) * 4
+        step = max(1, vertex_count // sample_limit)
+        xs, ys, zs, opacities, max_scales = [], [], [], [], []
+
+        for index in range(vertex_count):
+            data = f.read(stride)
+            if len(data) != stride:
+                break
+            if index % step:
+                continue
+            values = struct.unpack("<" + "f" * len(properties), data)
+            x, y, z = values[prop_index["x"]], values[prop_index["y"]], values[prop_index["z"]]
+            if not all(math.isfinite(v) for v in (x, y, z)):
+                continue
+            xs.append(x)
+            ys.append(y)
+            zs.append(z)
+            opacity_logit = values[prop_index["opacity"]]
+            if opacity_logit > 80:
+                opacity = 1.0
+            elif opacity_logit < -80:
+                opacity = 0.0
+            else:
+                opacity = 1 / (1 + math.exp(-opacity_logit))
+            opacities.append(opacity)
+            try:
+                max_scales.append(
+                    max(
+                        math.exp(values[prop_index["scale_0"]]),
+                        math.exp(values[prop_index["scale_1"]]),
+                        math.exp(values[prop_index["scale_2"]]),
+                    )
+                )
+            except OverflowError:
+                max_scales.append(float("inf"))
+
+    central_spans = [
+        quantile(xs, 0.95) - quantile(xs, 0.05),
+        quantile(ys, 0.95) - quantile(ys, 0.05),
+        quantile(zs, 0.95) - quantile(zs, 0.05),
+    ]
+    broad_spans = [
+        quantile(xs, 0.99) - quantile(xs, 0.01),
+        quantile(ys, 0.99) - quantile(ys, 0.01),
+        quantile(zs, 0.99) - quantile(zs, 0.01),
+    ]
+    central_diag = vector_norm(central_spans)
+    broad_diag = vector_norm(broad_spans)
+    opaque_ratio = (
+        sum(1 for value in opacities if value >= 0.5) / len(opacities)
+        if opacities
+        else 0
+    )
+
+    return {
+        "splatCount": vertex_count,
+        "opaqueSplatRatio": opaque_ratio,
+        "scaleP95": quantile(max_scales, 0.95),
+        "scaleP99": quantile(max_scales, 0.99),
+        "centralDiagonal": central_diag,
+        "broadDiagonal": broad_diag,
+        "outlierRatio": broad_diag / max(central_diag, 0.001),
+    }
+
+
+def assert_reconstruction_quality(frame_count, stats, splat_stats):
     registered_images = int(stats.get("registeredImages") or 0)
     sparse_points = int(stats.get("sparsePoints") or 0)
+    splat_count = int(splat_stats.get("splatCount") or 0)
+    camera_baseline = float(stats.get("cameraBaselineP95") or 0)
+    camera_span = vector_norm(stats.get("cameraSpan") or [0, 0, 0])
+    camera_spread_ratio = camera_baseline / max(camera_span, 0.001)
+    opaque_splat_ratio = float(splat_stats.get("opaqueSplatRatio") or 0)
+    scale_p95 = float(splat_stats.get("scaleP95") or 0)
+    outlier_ratio = float(splat_stats.get("outlierRatio") or 0)
     registered_ratio = registered_images / frame_count if frame_count else 0
     min_registered = min(MIN_REGISTERED_IMAGES, max(35, int(frame_count * 0.22)))
     min_sparse_points = min(MIN_SPARSE_POINTS, max(2500, int(frame_count * 30)))
@@ -444,11 +625,21 @@ def assert_reconstruction_quality(frame_count, stats, splat_count):
         failures.append(f"only {sparse_points} stable scene points")
     if splat_count < min_splat_count:
         failures.append(f"only {splat_count} render points")
+    if camera_baseline < MIN_CAMERA_BASELINE:
+        failures.append("not enough real camera movement")
+    if camera_spread_ratio < MIN_CAMERA_SPREAD_RATIO:
+        failures.append("camera movement is too concentrated")
+    if opaque_splat_ratio < MIN_OPAQUE_SPLAT_RATIO:
+        failures.append("not enough visible 3D detail")
+    if scale_p95 > MAX_SPLAT_SCALE_P95:
+        failures.append("3D detail is too blurred")
+    if outlier_ratio > MAX_SPLAT_OUTLIER_RATIO:
+        failures.append("3D structure has too many outliers")
 
     if failures:
         raise ReconstructionQualityError(
-            "The uploaded video set does not contain enough stable visual overlap for a reliable 3D tour. "
-            "Please record slower, brighter clips with shared overlap between consecutive videos. "
+            "The uploaded video set is not reliable enough for a sellable 3D tour. "
+            "Please record slower, brighter landscape clips with more overlap and real side-to-side movement. "
             f"Quality checks failed: {', '.join(failures)}."
         )
 
@@ -458,6 +649,10 @@ def assert_reconstruction_quality(frame_count, stats, splat_count):
         "registeredImageRatio": registered_ratio,
         "sparsePoints": sparse_points,
         "splatCount": splat_count,
+        "cameraBaselineP95": camera_baseline,
+        "opaqueSplatRatio": opaque_splat_ratio,
+        "scaleP95": scale_p95,
+        "outlierRatio": outlier_ratio,
     }
 
 
@@ -481,8 +676,8 @@ def process_scene(conn, job, scene, base_work_dir, progress_start, progress_end)
 
     update_job(conn, job["id"], progress=progress_start + int((progress_end - progress_start) * 0.7))
     run_opensplat(model_dir, images_dir, output_path)
-    splat_count = read_ply_vertex_count(output_path)
-    quality = assert_reconstruction_quality(frame_count, model_stats, splat_count)
+    splat_stats = analyze_ply(output_path)
+    quality = assert_reconstruction_quality(frame_count, model_stats, splat_stats)
 
     update_job(conn, job["id"], progress=progress_end)
     file_url = upload_result(output_path)
