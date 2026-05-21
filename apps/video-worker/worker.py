@@ -55,7 +55,7 @@ class ReconstructionQualityError(RuntimeError):
     pass
 
 
-def run(cmd, cwd=None):
+def run(cmd, cwd=None, heartbeat=None):
     run_cmd = [str(c) for c in cmd]
     env = os.environ.copy()
     if run_cmd and run_cmd[0] == "colmap":
@@ -64,7 +64,18 @@ def run(cmd, cwd=None):
         if shutil.which("xvfb-run"):
             run_cmd = ["xvfb-run", "-a", "--server-args=-screen 0 1280x1024x24", *run_cmd]
     print("$", " ".join(str(c) for c in run_cmd), flush=True)
-    subprocess.run(run_cmd, cwd=cwd, env=env, check=True)
+    process = subprocess.Popen(run_cmd, cwd=cwd, env=env)
+    last_heartbeat = time.monotonic()
+    while True:
+        return_code = process.poll()
+        if return_code is not None:
+            if return_code:
+                raise subprocess.CalledProcessError(return_code, run_cmd)
+            return
+        if heartbeat and time.monotonic() - last_heartbeat >= 15:
+            heartbeat()
+            last_heartbeat = time.monotonic()
+        time.sleep(1)
 
 
 def quantile(values, q, fallback=0.0):
@@ -350,7 +361,7 @@ def group_video_items(video_items):
     return groups[:MAX_SCENES_PER_TOUR]
 
 
-def run_colmap(images_dir, work_dir):
+def run_colmap(images_dir, work_dir, heartbeat=None):
     db_path = work_dir / "colmap.db"
     sparse_dir = work_dir / "sparse"
     sparse_dir.mkdir(parents=True, exist_ok=True)
@@ -375,7 +386,7 @@ def run_colmap(images_dir, work_dir):
         str(SIFT_PEAK_THRESHOLD),
         "--SiftExtraction.edge_threshold",
         str(SIFT_EDGE_THRESHOLD),
-    ])
+    ], heartbeat=heartbeat)
     run([
         "colmap",
         "sequential_matcher",
@@ -385,7 +396,7 @@ def run_colmap(images_dir, work_dir):
         COLMAP_USE_GPU,
         "--SequentialMatching.overlap",
         str(SEQUENTIAL_MATCH_OVERLAP),
-    ])
+    ], heartbeat=heartbeat)
     if frame_count <= EXHAUSTIVE_MATCH_MAX_FRAMES:
         run([
             "colmap",
@@ -396,7 +407,7 @@ def run_colmap(images_dir, work_dir):
             COLMAP_USE_GPU,
             "--SiftMatching.guided_matching",
             "1",
-        ])
+        ], heartbeat=heartbeat)
     run([
         "colmap",
         "mapper",
@@ -412,7 +423,7 @@ def run_colmap(images_dir, work_dir):
         "50",
         "--Mapper.abs_pose_min_num_inliers",
         "15",
-    ])
+    ], heartbeat=heartbeat)
 
     model_dirs = [path for path in sparse_dir.iterdir() if path.is_dir()]
     if not model_dirs:
@@ -886,12 +897,18 @@ def process_scene(conn, job, scene, base_work_dir, progress_start, progress_end)
         )
 
     update_job(conn, job["id"], progress=progress_start + int((progress_end - progress_start) * 0.25))
-    model_dir = run_colmap(images_dir, scene_dir)
+    def heartbeat():
+        update_job(conn, job["id"], progress=progress_start + int((progress_end - progress_start) * 0.25))
+
+    model_dir = run_colmap(images_dir, scene_dir, heartbeat=heartbeat)
     model_stats = analyze_colmap_model(model_dir, scene_dir)
     assert_geometry_quality(frame_count, model_stats)
 
     update_job(conn, job["id"], progress=progress_start + int((progress_end - progress_start) * 0.7))
-    run_opensplat(model_dir, images_dir, output_path)
+    def training_heartbeat():
+        update_job(conn, job["id"], progress=progress_start + int((progress_end - progress_start) * 0.7))
+
+    run_opensplat(model_dir, images_dir, output_path, heartbeat=training_heartbeat)
     optimized_path = scene_dir / "tour-optimized.ply"
     optimization_stats = optimize_ply_for_web(output_path, optimized_path)
     splat_stats = analyze_ply(optimized_path)
@@ -912,7 +929,7 @@ def process_scene(conn, job, scene, base_work_dir, progress_start, progress_end)
     }
 
 
-def run_opensplat(model_dir, images_dir, output_path):
+def run_opensplat(model_dir, images_dir, output_path, heartbeat=None):
     run([
         OPEN_SPLAT_BIN,
         str(model_dir),
@@ -924,7 +941,7 @@ def run_opensplat(model_dir, images_dir, output_path):
         str(SPLAT_ITERATIONS),
         "--densify-grad-thresh",
         str(SPLAT_DENSIFY_GRAD_THRESH),
-    ])
+    ], heartbeat=heartbeat)
     if not output_path.exists():
         raise RuntimeError("OpenSplat did not produce an output file.")
 
