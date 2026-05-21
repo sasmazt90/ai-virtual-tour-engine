@@ -601,20 +601,15 @@ def analyze_ply(path, sample_limit=80000):
     }
 
 
-def assert_reconstruction_quality(frame_count, stats, splat_stats):
+def assert_geometry_quality(frame_count, stats):
     registered_images = int(stats.get("registeredImages") or 0)
     sparse_points = int(stats.get("sparsePoints") or 0)
-    splat_count = int(splat_stats.get("splatCount") or 0)
     camera_baseline = float(stats.get("cameraBaselineP95") or 0)
     camera_span = vector_norm(stats.get("cameraSpan") or [0, 0, 0])
     camera_spread_ratio = camera_baseline / max(camera_span, 0.001)
-    opaque_splat_ratio = float(splat_stats.get("opaqueSplatRatio") or 0)
-    scale_p95 = float(splat_stats.get("scaleP95") or 0)
-    outlier_ratio = float(splat_stats.get("outlierRatio") or 0)
     registered_ratio = registered_images / frame_count if frame_count else 0
     min_registered = min(MIN_REGISTERED_IMAGES, max(35, int(frame_count * 0.22)))
     min_sparse_points = min(MIN_SPARSE_POINTS, max(2500, int(frame_count * 30)))
-    min_splat_count = min(MIN_SPLAT_COUNT, max(12000, int(frame_count * 120)))
 
     failures = []
     if registered_images < min_registered:
@@ -623,12 +618,38 @@ def assert_reconstruction_quality(frame_count, stats, splat_stats):
         failures.append(f"only {registered_ratio:.0%} of frames aligned")
     if sparse_points < min_sparse_points:
         failures.append(f"only {sparse_points} stable scene points")
-    if splat_count < min_splat_count:
-        failures.append(f"only {splat_count} render points")
     if camera_baseline < MIN_CAMERA_BASELINE:
         failures.append("not enough real camera movement")
     if camera_spread_ratio < MIN_CAMERA_SPREAD_RATIO:
         failures.append("camera movement is too concentrated")
+
+    if failures:
+        raise ReconstructionQualityError(
+            "The uploaded video set is not reliable enough for a sellable 3D tour. "
+            "Please record slower, brighter landscape clips with more overlap and real side-to-side movement. "
+            f"Quality checks failed: {', '.join(failures)}."
+        )
+
+    return {
+        "frameCount": frame_count,
+        "registeredImages": registered_images,
+        "registeredImageRatio": registered_ratio,
+        "sparsePoints": sparse_points,
+        "cameraBaselineP95": camera_baseline,
+    }
+
+
+def assert_reconstruction_quality(frame_count, stats, splat_stats):
+    quality = assert_geometry_quality(frame_count, stats)
+    splat_count = int(splat_stats.get("splatCount") or 0)
+    opaque_splat_ratio = float(splat_stats.get("opaqueSplatRatio") or 0)
+    scale_p95 = float(splat_stats.get("scaleP95") or 0)
+    outlier_ratio = float(splat_stats.get("outlierRatio") or 0)
+    min_splat_count = min(MIN_SPLAT_COUNT, max(12000, int(frame_count * 120)))
+
+    failures = []
+    if splat_count < min_splat_count:
+        failures.append(f"only {splat_count} render points")
     if opaque_splat_ratio < MIN_OPAQUE_SPLAT_RATIO:
         failures.append("not enough visible 3D detail")
     if scale_p95 > MAX_SPLAT_SCALE_P95:
@@ -644,12 +665,8 @@ def assert_reconstruction_quality(frame_count, stats, splat_stats):
         )
 
     return {
-        "frameCount": frame_count,
-        "registeredImages": registered_images,
-        "registeredImageRatio": registered_ratio,
-        "sparsePoints": sparse_points,
+        **quality,
         "splatCount": splat_count,
-        "cameraBaselineP95": camera_baseline,
         "opaqueSplatRatio": opaque_splat_ratio,
         "scaleP95": scale_p95,
         "outlierRatio": outlier_ratio,
@@ -673,6 +690,7 @@ def process_scene(conn, job, scene, base_work_dir, progress_start, progress_end)
     update_job(conn, job["id"], progress=progress_start + int((progress_end - progress_start) * 0.25))
     model_dir = run_colmap(images_dir, scene_dir)
     model_stats = analyze_colmap_model(model_dir, scene_dir)
+    assert_geometry_quality(frame_count, model_stats)
 
     update_job(conn, job["id"], progress=progress_start + int((progress_end - progress_start) * 0.7))
     run_opensplat(model_dir, images_dir, output_path)
