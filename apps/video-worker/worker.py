@@ -365,6 +365,28 @@ def group_video_items(video_items):
     return groups[:MAX_SCENES_PER_TOUR]
 
 
+def scene_from_single_video(parent_scene, item, index):
+    original_name = str(item.get("originalName") or "").strip()
+    stem = Path(original_name).stem if original_name else f"Clip {index}"
+    title = re.sub(r"[-_]+", " ", stem).strip() or f"{parent_scene['title']} clip {index}"
+    return {
+        "key": f"{parent_scene['key']}-clip-{index}",
+        "title": title_from_scene_key(title),
+        "videos": [item],
+        "fallbackOf": parent_scene["key"],
+    }
+
+
+def fallback_scenes_for_group(scene):
+    videos = scene.get("videos") or []
+    if len(videos) <= 1:
+        return []
+    return [
+        scene_from_single_video(scene, item, index)
+        for index, item in enumerate(videos, start=1)
+    ]
+
+
 def run_colmap(images_dir, work_dir, heartbeat=None):
     db_path = work_dir / "colmap.db"
     sparse_dir = work_dir / "sparse"
@@ -1168,6 +1190,39 @@ def process_job(conn, job):
                     "error": str(exc),
                 })
                 print(f"Scene skipped: {scene['title']}: {exc}", flush=True)
+                fallback_scenes = fallback_scenes_for_group(scene)
+                if fallback_scenes:
+                    print(
+                        f"Trying {len(fallback_scenes)} single-video fallbacks for {scene['title']}",
+                        flush=True,
+                    )
+                for fallback_index, fallback_scene in enumerate(fallback_scenes):
+                    if len(scenes) >= MAX_SCENES_PER_TOUR:
+                        break
+                    fallback_start = min(87, start + fallback_index)
+                    fallback_end = min(90, max(fallback_start + 1, end))
+                    try:
+                        scenes.append(
+                            process_scene(
+                                conn,
+                                job,
+                                fallback_scene,
+                                work_dir,
+                                fallback_start,
+                                fallback_end,
+                            )
+                        )
+                    except Exception as fallback_exc:
+                        skipped_scenes.append({
+                            "key": fallback_scene["key"],
+                            "title": fallback_scene["title"],
+                            "error": str(fallback_exc),
+                            "fallbackOf": scene["key"],
+                        })
+                        print(
+                            f"Fallback scene skipped: {fallback_scene['title']}: {fallback_exc}",
+                            flush=True,
+                        )
 
         if not scenes:
             update_job(
