@@ -35,6 +35,12 @@ MIN_CAMERA_SPREAD_RATIO = float(os.getenv("MIN_CAMERA_SPREAD_RATIO", "0.04"))
 MIN_OPAQUE_SPLAT_RATIO = float(os.getenv("MIN_OPAQUE_SPLAT_RATIO", "0.18"))
 MAX_SPLAT_SCALE_P95 = float(os.getenv("MAX_SPLAT_SCALE_P95", "0.08"))
 MAX_SPLAT_OUTLIER_RATIO = float(os.getenv("MAX_SPLAT_OUTLIER_RATIO", "4.5"))
+MAX_OUTPUT_SPLATS = int(os.getenv("MAX_OUTPUT_SPLATS", "140000"))
+MAX_OUTPUT_FILE_MB = float(os.getenv("MAX_OUTPUT_FILE_MB", "42"))
+PLY_MIN_OPACITY = float(os.getenv("PLY_MIN_OPACITY", "0.35"))
+PLY_MAX_SCALE = float(os.getenv("PLY_MAX_SCALE", "0.08"))
+PLY_OUTLIER_QUANTILE_LOW = float(os.getenv("PLY_OUTLIER_QUANTILE_LOW", "0.02"))
+PLY_OUTLIER_QUANTILE_HIGH = float(os.getenv("PLY_OUTLIER_QUANTILE_HIGH", "0.98"))
 MIN_SCENE_FRAMES = int(os.getenv("MIN_SCENE_FRAMES", "45"))
 MAX_SCENES_PER_TOUR = int(os.getenv("MAX_SCENES_PER_TOUR", "8"))
 SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "16384"))
@@ -506,29 +512,61 @@ def read_ply_vertex_count(path):
     return 0
 
 
+def read_ply_header(f):
+    header_lines = []
+    properties = []
+    vertex_count = 0
+    is_binary_little_endian = False
+    in_vertex_element = False
+
+    while True:
+        raw = f.readline()
+        if not raw:
+            break
+        line = raw.decode("utf-8", errors="ignore").strip()
+        header_lines.append(line)
+
+        if line == "format binary_little_endian 1.0":
+            is_binary_little_endian = True
+        elif line.startswith("element vertex "):
+            in_vertex_element = True
+            try:
+                vertex_count = int(line.split()[-1])
+            except ValueError:
+                vertex_count = 0
+        elif line.startswith("element "):
+            in_vertex_element = False
+        elif in_vertex_element and line.startswith("property "):
+            parts = line.split()
+            if len(parts) >= 3:
+                properties.append((parts[1], parts[-1]))
+        elif line == "end_header":
+            break
+
+    return {
+        "headerLines": header_lines,
+        "vertexCount": vertex_count,
+        "properties": properties,
+        "isBinaryLittleEndian": is_binary_little_endian,
+        "headerSize": f.tell(),
+    }
+
+
+def sigmoid(value):
+    if value > 80:
+        return 1.0
+    if value < -80:
+        return 0.0
+    return 1 / (1 + math.exp(-value))
+
+
 def analyze_ply(path, sample_limit=80000):
     with open(path, "rb") as f:
-        properties = []
-        vertex_count = 0
-        is_binary_little_endian = False
-        while True:
-            raw = f.readline()
-            if not raw:
-                break
-            line = raw.decode("utf-8", errors="ignore").strip()
-            if line == "format binary_little_endian 1.0":
-                is_binary_little_endian = True
-            elif line.startswith("element vertex "):
-                try:
-                    vertex_count = int(line.split()[-1])
-                except ValueError:
-                    vertex_count = 0
-            elif line.startswith("property float "):
-                properties.append(line.split()[-1])
-            elif line == "end_header":
-                break
+        header = read_ply_header(f)
+        vertex_count = header["vertexCount"]
+        properties = [name for prop_type, name in header["properties"] if prop_type == "float"]
 
-        if not is_binary_little_endian or not vertex_count or not properties:
+        if not header["isBinaryLittleEndian"] or not vertex_count or not properties:
             return {"splatCount": vertex_count}
 
         required = {"x", "y", "z", "opacity", "scale_0", "scale_1", "scale_2"}
@@ -553,14 +591,7 @@ def analyze_ply(path, sample_limit=80000):
             xs.append(x)
             ys.append(y)
             zs.append(z)
-            opacity_logit = values[prop_index["opacity"]]
-            if opacity_logit > 80:
-                opacity = 1.0
-            elif opacity_logit < -80:
-                opacity = 0.0
-            else:
-                opacity = 1 / (1 + math.exp(-opacity_logit))
-            opacities.append(opacity)
+            opacities.append(sigmoid(values[prop_index["opacity"]]))
             try:
                 max_scales.append(
                     max(
@@ -598,6 +629,136 @@ def analyze_ply(path, sample_limit=80000):
         "centralDiagonal": central_diag,
         "broadDiagonal": broad_diag,
         "outlierRatio": broad_diag / max(central_diag, 0.001),
+    }
+
+
+def optimize_ply_for_web(input_path, output_path):
+    with open(input_path, "rb") as f:
+        header = read_ply_header(f)
+        properties = header["properties"]
+        vertex_count = header["vertexCount"]
+
+        if not header["isBinaryLittleEndian"] or not vertex_count or not properties:
+            shutil.copyfile(input_path, output_path)
+            return {"sourceSplatCount": vertex_count, "optimizedSplatCount": vertex_count, "optimized": False}
+
+        if any(prop_type != "float" for prop_type, _ in properties):
+            shutil.copyfile(input_path, output_path)
+            return {"sourceSplatCount": vertex_count, "optimizedSplatCount": vertex_count, "optimized": False}
+
+        prop_names = [name for _, name in properties]
+        required = {"x", "y", "z", "opacity", "scale_0", "scale_1", "scale_2"}
+        if not required.issubset(set(prop_names)):
+            shutil.copyfile(input_path, output_path)
+            return {"sourceSplatCount": vertex_count, "optimizedSplatCount": vertex_count, "optimized": False}
+
+        prop_index = {name: index for index, name in enumerate(prop_names)}
+        stride = len(prop_names) * 4
+        fmt = "<" + "f" * len(prop_names)
+        records = []
+        xs, ys, zs = [], [], []
+
+        for index in range(vertex_count):
+            data = f.read(stride)
+            if len(data) != stride:
+                break
+            values = struct.unpack(fmt, data)
+            x, y, z = values[prop_index["x"]], values[prop_index["y"]], values[prop_index["z"]]
+            if not all(math.isfinite(v) for v in (x, y, z)):
+                continue
+            try:
+                max_scale = max(
+                    math.exp(values[prop_index["scale_0"]]),
+                    math.exp(values[prop_index["scale_1"]]),
+                    math.exp(values[prop_index["scale_2"]]),
+                )
+            except OverflowError:
+                max_scale = float("inf")
+            opacity = sigmoid(values[prop_index["opacity"]])
+            xs.append(x)
+            ys.append(y)
+            zs.append(z)
+            records.append({
+                "index": index,
+                "data": data,
+                "x": x,
+                "y": y,
+                "z": z,
+                "opacity": opacity,
+                "maxScale": max_scale,
+            })
+
+    if not records:
+        raise ReconstructionQualityError("The 3D reconstruction did not contain usable render points.")
+
+    low = max(0.0, min(0.45, PLY_OUTLIER_QUANTILE_LOW))
+    high = min(1.0, max(0.55, PLY_OUTLIER_QUANTILE_HIGH))
+    bounds = {
+        "x": (quantile(xs, low), quantile(xs, high)),
+        "y": (quantile(ys, low), quantile(ys, high)),
+        "z": (quantile(zs, low), quantile(zs, high)),
+    }
+
+    def within_bounds(record):
+        return (
+            bounds["x"][0] <= record["x"] <= bounds["x"][1]
+            and bounds["y"][0] <= record["y"] <= bounds["y"][1]
+            and bounds["z"][0] <= record["z"] <= bounds["z"][1]
+        )
+
+    filtered = [
+        record
+        for record in records
+        if record["opacity"] >= PLY_MIN_OPACITY
+        and record["maxScale"] <= PLY_MAX_SCALE
+        and within_bounds(record)
+    ]
+
+    min_after_filter = max(12000, min(MIN_SPLAT_COUNT, int(vertex_count * 0.08)))
+    if len(filtered) < min_after_filter:
+        relaxed_opacity = max(0.18, PLY_MIN_OPACITY * 0.65)
+        relaxed_scale = min(0.14, PLY_MAX_SCALE * 1.6)
+        filtered = [
+            record
+            for record in records
+            if record["opacity"] >= relaxed_opacity
+            and record["maxScale"] <= relaxed_scale
+            and within_bounds(record)
+        ]
+
+    if len(filtered) < min_after_filter:
+        raise ReconstructionQualityError(
+            "The uploaded video set produced too few clean 3D points after quality filtering."
+        )
+
+    header_text = "\n".join(header["headerLines"]) + "\n"
+    max_by_file_size = int(max(1, (MAX_OUTPUT_FILE_MB * 1024 * 1024 - len(header_text.encode("utf-8"))) // stride))
+    max_output_splats = max(1, min(MAX_OUTPUT_SPLATS, max_by_file_size))
+
+    if len(filtered) > max_output_splats:
+        filtered = sorted(
+            filtered,
+            key=lambda record: (record["opacity"], -record["maxScale"]),
+            reverse=True,
+        )[:max_output_splats]
+
+    filtered.sort(key=lambda record: record["index"])
+    output_header_lines = [
+        f"element vertex {len(filtered)}" if line.startswith("element vertex ") else line
+        for line in header["headerLines"]
+    ]
+    output_header = ("\n".join(output_header_lines) + "\n").encode("utf-8")
+
+    with open(output_path, "wb") as f:
+        f.write(output_header)
+        for record in filtered:
+            f.write(record["data"])
+
+    return {
+        "sourceSplatCount": vertex_count,
+        "optimizedSplatCount": len(filtered),
+        "optimized": True,
+        "outputFileMb": output_path.stat().st_size / (1024 * 1024),
     }
 
 
@@ -694,11 +855,14 @@ def process_scene(conn, job, scene, base_work_dir, progress_start, progress_end)
 
     update_job(conn, job["id"], progress=progress_start + int((progress_end - progress_start) * 0.7))
     run_opensplat(model_dir, images_dir, output_path)
-    splat_stats = analyze_ply(output_path)
+    optimized_path = scene_dir / "tour-optimized.ply"
+    optimization_stats = optimize_ply_for_web(output_path, optimized_path)
+    splat_stats = analyze_ply(optimized_path)
     quality = assert_reconstruction_quality(frame_count, model_stats, splat_stats)
+    quality = {**quality, **optimization_stats}
 
     update_job(conn, job["id"], progress=progress_end)
-    file_url = upload_result(output_path)
+    file_url = upload_result(optimized_path)
 
     return {
         "key": scene["key"],
@@ -730,6 +894,11 @@ def run_opensplat(model_dir, images_dir, output_path):
 def upload_result(path):
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     object_path = f"video-3d-tours/{time.strftime('%Y-%m-%d')}/{uuid.uuid4()}{path.suffix}"
+    file_mb = path.stat().st_size / (1024 * 1024)
+    if file_mb > MAX_OUTPUT_FILE_MB + 1:
+        raise ReconstructionQualityError(
+            f"The generated 3D tour is still too large to upload safely ({file_mb:.1f} MB)."
+        )
     with open(path, "rb") as f:
         supabase.storage.from_(SUPABASE_STORAGE_BUCKET).upload(
             object_path,
