@@ -49,6 +49,7 @@ SIFT_PEAK_THRESHOLD = os.getenv("SIFT_PEAK_THRESHOLD", "0.002")
 SIFT_EDGE_THRESHOLD = os.getenv("SIFT_EDGE_THRESHOLD", "10")
 SEQUENTIAL_MATCH_OVERLAP = int(os.getenv("SEQUENTIAL_MATCH_OVERLAP", "20"))
 EXHAUSTIVE_MATCH_MAX_FRAMES = int(os.getenv("EXHAUSTIVE_MATCH_MAX_FRAMES", "220"))
+RUN_EXHAUSTIVE_MATCHING = os.getenv("RUN_EXHAUSTIVE_MATCHING", "0").lower() in ("1", "true", "yes")
 COLMAP_USE_GPU = os.getenv("COLMAP_USE_GPU", "0")
 
 
@@ -400,7 +401,7 @@ def run_colmap(images_dir, work_dir, heartbeat=None):
         "--SequentialMatching.overlap",
         str(SEQUENTIAL_MATCH_OVERLAP),
     ], heartbeat=heartbeat)
-    if frame_count <= EXHAUSTIVE_MATCH_MAX_FRAMES:
+    if RUN_EXHAUSTIVE_MATCHING and frame_count <= EXHAUSTIVE_MATCH_MAX_FRAMES:
         run([
             "colmap",
             "exhaustive_matcher",

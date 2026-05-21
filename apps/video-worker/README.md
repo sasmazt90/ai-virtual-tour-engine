@@ -32,6 +32,7 @@ MIN_SPARSE_POINTS=14000
 MIN_SPLAT_COUNT=70000
 MAX_SCENE_FRAMES=360
 EXHAUSTIVE_MATCH_MAX_FRAMES=220
+RUN_EXHAUSTIVE_MATCHING=0
 ```
 
 `OPEN_SPLAT_BIN` must point to an OpenSplat binary available in the container or host.
@@ -77,3 +78,8 @@ opensplat /work/project/sparse/1 --colmap-image-path /work/project/images -o tou
 After reconstruction, the worker validates the output before saving it. A job fails
 instead of publishing a broken tour if too few video frames align, if the sparse
 scene is weak, or if the exported splat has too few renderable points.
+
+Sequential matching is the default because it is predictable for walkthrough
+videos and finishes in a practical time on rented GPUs. Set
+`RUN_EXHAUSTIVE_MATCHING=1` only for short clips when you intentionally want the
+slower all-to-all matching pass.
