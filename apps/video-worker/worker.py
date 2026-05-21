@@ -44,6 +44,7 @@ MIN_SCENE_FRAMES = int(os.getenv("MIN_SCENE_FRAMES", "45"))
 MAX_SCENE_FRAMES = int(os.getenv("MAX_SCENE_FRAMES", "180"))
 FRAME_QUALITY_DROP_RATIO = float(os.getenv("FRAME_QUALITY_DROP_RATIO", "0.12"))
 MAX_SCENES_PER_TOUR = int(os.getenv("MAX_SCENES_PER_TOUR", "8"))
+VIDEO_SCENE_MODE = os.getenv("VIDEO_SCENE_MODE", "grouped").lower()
 SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "8192"))
 SIFT_PEAK_THRESHOLD = os.getenv("SIFT_PEAK_THRESHOLD", "0.002")
 SIFT_EDGE_THRESHOLD = os.getenv("SIFT_EDGE_THRESHOLD", "10")
@@ -339,6 +340,22 @@ def title_from_scene_key(key):
 def group_video_items(video_items):
     groups = []
     by_key = {}
+
+    if VIDEO_SCENE_MODE in ("single", "per-video", "clip"):
+        return [
+            {
+                "key": f"clip-{index}",
+                "title": title_from_scene_key(
+                    re.sub(
+                        r"[^a-z0-9]+",
+                        "-",
+                        Path(str(item.get("originalName") or f"Clip {index}")).stem.lower(),
+                    ).strip("-") or f"clip-{index}"
+                ),
+                "videos": [item],
+            }
+            for index, item in enumerate(video_items[:MAX_SCENES_PER_TOUR], start=1)
+        ]
 
     for item in video_items:
         key = scene_key_from_video(item)
