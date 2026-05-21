@@ -42,6 +42,7 @@ PLY_MAX_SCALE = float(os.getenv("PLY_MAX_SCALE", "0.08"))
 PLY_OUTLIER_QUANTILE_LOW = float(os.getenv("PLY_OUTLIER_QUANTILE_LOW", "0.02"))
 PLY_OUTLIER_QUANTILE_HIGH = float(os.getenv("PLY_OUTLIER_QUANTILE_HIGH", "0.98"))
 MIN_SCENE_FRAMES = int(os.getenv("MIN_SCENE_FRAMES", "45"))
+MAX_SCENE_FRAMES = int(os.getenv("MAX_SCENE_FRAMES", "220"))
 MAX_SCENES_PER_TOUR = int(os.getenv("MAX_SCENES_PER_TOUR", "8"))
 SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "16384"))
 SIFT_PEAK_THRESHOLD = os.getenv("SIFT_PEAK_THRESHOLD", "0.002")
@@ -445,6 +446,29 @@ def run_colmap(images_dir, work_dir, heartbeat=None):
 
 def count_extracted_frames(images_dir):
     return sum(1 for _ in images_dir.glob("*.jpg"))
+
+
+def limit_scene_frames(images_dir, max_frames=MAX_SCENE_FRAMES):
+    frames = sorted(images_dir.glob("*.jpg"))
+    frame_count = len(frames)
+    if max_frames <= 0 or frame_count <= max_frames:
+        return frame_count
+
+    keep_indexes = {
+        round(index * (frame_count - 1) / (max_frames - 1))
+        for index in range(max_frames)
+    }
+    keep = {frames[index] for index in keep_indexes}
+    for frame in frames:
+        if frame not in keep:
+            frame.unlink(missing_ok=True)
+
+    kept_count = len(keep)
+    print(
+        f"Reduced scene frames from {frame_count} to {kept_count} for faster, more stable reconstruction",
+        flush=True,
+    )
+    return kept_count
 
 
 def analyze_colmap_model(model_dir, work_dir):
@@ -890,7 +914,7 @@ def process_scene(conn, job, scene, base_work_dir, progress_start, progress_end)
 
     update_job(conn, job["id"], progress=progress_start)
     extract_video_set(scene["videos"], scene_dir, images_dir)
-    frame_count = count_extracted_frames(images_dir)
+    frame_count = limit_scene_frames(images_dir)
     if frame_count < MIN_SCENE_FRAMES:
         raise ReconstructionQualityError(
             f"{scene['title']} does not have enough usable video frames for a reliable 3D tour."
