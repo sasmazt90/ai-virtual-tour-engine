@@ -13,7 +13,6 @@ from pathlib import Path
 
 import psycopg
 import requests
-from supabase import create_client
 
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -36,7 +35,7 @@ MIN_OPAQUE_SPLAT_RATIO = float(os.getenv("MIN_OPAQUE_SPLAT_RATIO", "0.18"))
 MAX_SPLAT_SCALE_P95 = float(os.getenv("MAX_SPLAT_SCALE_P95", "0.065"))
 MAX_SPLAT_OUTLIER_RATIO = float(os.getenv("MAX_SPLAT_OUTLIER_RATIO", "3.5"))
 MAX_OUTPUT_SPLATS = int(os.getenv("MAX_OUTPUT_SPLATS", "220000"))
-MAX_OUTPUT_FILE_MB = float(os.getenv("MAX_OUTPUT_FILE_MB", "72"))
+MAX_OUTPUT_FILE_MB = float(os.getenv("MAX_OUTPUT_FILE_MB", "45"))
 PLY_MIN_OPACITY = float(os.getenv("PLY_MIN_OPACITY", "0.32"))
 PLY_MAX_SCALE = float(os.getenv("PLY_MAX_SCALE", "0.065"))
 PLY_OUTLIER_QUANTILE_LOW = float(os.getenv("PLY_OUTLIER_QUANTILE_LOW", "0.02"))
@@ -983,20 +982,45 @@ def run_opensplat(model_dir, images_dir, output_path, heartbeat=None):
 
 
 def upload_result(path):
-    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     object_path = f"video-3d-tours/{time.strftime('%Y-%m-%d')}/{uuid.uuid4()}{path.suffix}"
     file_mb = path.stat().st_size / (1024 * 1024)
     if file_mb > MAX_OUTPUT_FILE_MB + 1:
         raise ReconstructionQualityError(
             f"The generated 3D tour is still too large to upload safely ({file_mb:.1f} MB)."
         )
+
+    content_type = "model/vnd.ply" if path.suffix == ".ply" else "application/octet-stream"
+    upload_url = (
+        f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/"
+        f"{SUPABASE_STORAGE_BUCKET}/{object_path}"
+    )
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": content_type,
+        "x-upsert": "false",
+    }
+
     with open(path, "rb") as f:
-        supabase.storage.from_(SUPABASE_STORAGE_BUCKET).upload(
-            object_path,
-            f.read(),
-            {"content-type": "model/vnd.ply" if path.suffix == ".ply" else "application/octet-stream"},
+        response = requests.post(upload_url, headers=headers, data=f, timeout=180)
+
+    if not response.ok:
+        detail = response.text[:500]
+        if response.status_code == 413:
+            raise ReconstructionQualityError(
+                f"The generated 3D tour file is too large for storage upload ({file_mb:.1f} MB). "
+                "The worker should retry with a smaller web export."
+            )
+        raise RuntimeError(
+            f"3D tour upload failed: {response.status_code} {response.reason}"
+            f"{f' - {detail}' if detail else ''}"
         )
-    return supabase.storage.from_(SUPABASE_STORAGE_BUCKET).get_public_url(object_path)
+
+    public_path = "/".join(requests.utils.quote(part, safe="") for part in object_path.split("/"))
+    return (
+        f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/public/"
+        f"{requests.utils.quote(SUPABASE_STORAGE_BUCKET, safe='')}/{public_path}"
+    )
 
 
 def save_virtual_tour(conn, job, scenes, skipped_scenes=None):
