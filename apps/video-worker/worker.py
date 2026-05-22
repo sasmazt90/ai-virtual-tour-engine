@@ -27,6 +27,7 @@ MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1600"))
 SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "10000"))
 SPLAT_DENSIFY_GRAD_THRESH = os.getenv("SPLAT_DENSIFY_GRAD_THRESH", "0.00012")
 MIN_REGISTERED_IMAGES = int(os.getenv("MIN_REGISTERED_IMAGES", "90"))
+MIN_SINGLE_SCENE_REGISTERED_IMAGES = int(os.getenv("MIN_SINGLE_SCENE_REGISTERED_IMAGES", "24"))
 MIN_REGISTERED_IMAGE_RATIO = float(os.getenv("MIN_REGISTERED_IMAGE_RATIO", "0.5"))
 MIN_SPARSE_POINTS = int(os.getenv("MIN_SPARSE_POINTS", "14000"))
 MIN_SPLAT_COUNT = int(os.getenv("MIN_SPLAT_COUNT", "70000"))
@@ -506,11 +507,11 @@ def group_video_items(video_items):
             groups.append(group)
         by_key[key]["videos"].append(item)
 
-    # A single clip rarely has enough parallax for a reliable 3D reconstruction.
-    # If every clip has a different name, keep them together instead of creating
-    # many weak one-video scenes.
+    # Independent walkthrough clips usually represent different rooms/routes.
+    # Treat them as separate scenes so one weak or disconnected clip does not
+    # poison the whole tour.
     if len(groups) > 1 and all(len(group["videos"]) == 1 for group in groups):
-        return [{"key": "main", "title": "Property", "videos": video_items}]
+        return groups[:MAX_SCENES_PER_TOUR]
 
     reliable_groups = [group for group in groups if len(group["videos"]) > 1]
     if reliable_groups:
@@ -1077,9 +1078,14 @@ def assert_geometry_quality(frame_count, stats):
     camera_span = vector_norm(stats.get("cameraSpan") or [0, 0, 0])
     camera_spread_ratio = camera_baseline / max(camera_span, 0.001)
     registered_ratio = registered_images / frame_count if frame_count else 0
+    minimum_registered_floor = (
+        MIN_SINGLE_SCENE_REGISTERED_IMAGES
+        if frame_count <= MAX_FALLBACK_SCENE_FRAMES
+        else MIN_REGISTERED_IMAGES
+    )
     min_registered = min(
         frame_count,
-        max(MIN_REGISTERED_IMAGES, int(frame_count * MIN_REGISTERED_IMAGE_RATIO)),
+        max(minimum_registered_floor, int(frame_count * MIN_REGISTERED_IMAGE_RATIO)),
     )
     min_sparse_points = max(MIN_SPARSE_POINTS, int(frame_count * 80))
 
@@ -1155,7 +1161,7 @@ def process_scene(conn, job, scene, base_work_dir, progress_start, progress_end)
     extract_video_set(scene["videos"], scene_dir, images_dir)
     scene_video_count = len(scene.get("videos") or [])
     is_fallback = bool(scene.get("fallbackOf"))
-    frame_limit = MAX_FALLBACK_SCENE_FRAMES if is_fallback else MAX_SCENE_FRAMES
+    frame_limit = MAX_FALLBACK_SCENE_FRAMES if is_fallback or scene_video_count == 1 else MAX_SCENE_FRAMES
     frame_count = limit_scene_frames(images_dir, max_frames=frame_limit)
     if frame_count < MIN_SCENE_FRAMES:
         raise ReconstructionQualityError(
