@@ -4,13 +4,14 @@ import { CheckCircle2, Clock3, Loader2, Video, XCircle } from "lucide-react";
 import { ModalShell } from "./ModalShell";
 import {
   AI_VIDEO_3D_CREDIT_TIERS,
+  AI_VIDEO_3D_MAX_BYTES,
   AI_VIDEO_3D_MAX_FILES,
   calculateVideo3DTourCreditCost,
 } from "@/app/api/utils/pricing";
 
 const SUPPORTED_EXTENSIONS = new Set(["mp4", "mov", "m4v"]);
 const DEFAULT_TOTAL_MS = 90 * 60 * 1000;
-const MAX_VIDEO_BYTES = 750 * 1024 * 1024;
+const MAX_VIDEO_BYTES = AI_VIDEO_3D_MAX_BYTES;
 const MIN_VIDEO_WIDTH = 1280;
 const MIN_VIDEO_HEIGHT = 720;
 const MIN_VIDEO_DURATION_SECONDS = 25;
@@ -31,7 +32,8 @@ function formatDuration(ms) {
 
 function formatFileSize(bytes) {
   const n = Number(bytes || 0);
-  if (!Number.isFinite(n) || n <= 0) return "0 MB";
+  if (!Number.isFinite(n) || n <= 0) return "0 KB";
+  if (n < 1024 * 1024) return `${Math.round(n / 1024).toLocaleString()} KB`;
   if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }

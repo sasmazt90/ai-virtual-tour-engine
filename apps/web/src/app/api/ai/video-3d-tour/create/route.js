@@ -173,7 +173,7 @@ export async function POST(request) {
 
     if (totalFileSizeBytes > AI_VIDEO_3D_MAX_BYTES) {
       return Response.json(
-        { error: "Videos are too large. Please upload 750 MB total or less." },
+        { error: "Videos are too large. Please upload 800 MB total or less." },
         { status: 413 },
       );
     }
