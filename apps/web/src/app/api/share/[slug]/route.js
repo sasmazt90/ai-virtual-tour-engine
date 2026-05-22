@@ -94,14 +94,7 @@ export async function GET(request, { params }) {
         au.email as agent_email,
         COALESCE(p.company_logo_url, au.image) as company_logo_url
       FROM profiles p
-      LEFT JOIN auth_users au
-        ON au.id = (
-          CASE
-            WHEN p.id::text LIKE '00000000-0000-0000-0000-%'
-            THEN (right(p.id::text, 12))::int
-            ELSE NULL
-          END
-        )
+      LEFT JOIN auth_users au ON au.id = p.id
       WHERE p.id = $1
       LIMIT 1
       `,
@@ -351,8 +344,13 @@ export async function GET(request, { params }) {
       );
     } else {
       const includeTourIdsFromMeta = uniqStrings(meta?.include_tour_ids);
+      const includeTourIdsFromColumn = uniqStrings(
+        link.include_virtual_tour_ids,
+      );
       const includeTourIds = includeTourIdsFromMeta.length
         ? includeTourIdsFromMeta
+        : includeTourIdsFromColumn.length
+          ? includeTourIdsFromColumn
         : link.include_tour_id
           ? [String(link.include_tour_id)]
           : [];
