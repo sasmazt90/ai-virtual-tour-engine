@@ -189,9 +189,9 @@ export default function Splat3DViewer({ tourPayload, height }) {
           sharedMemoryForWorkers: false,
           gpuAcceleratedSort: false,
           integerBasedSort: false,
-          ignoreDevicePixelRatio: false,
-          optimizeSplatData: true,
-          inMemoryCompressionLevel: 1,
+          ignoreDevicePixelRatio: true,
+          optimizeSplatData: false,
+          inMemoryCompressionLevel: 0,
           focalAdjustment: 1.15,
           sphericalHarmonicsDegree: 0,
         });
@@ -200,7 +200,7 @@ export default function Splat3DViewer({ tourPayload, height }) {
 
         const sceneOptions = {
           showLoadingUI: true,
-          progressiveLoad: false,
+          progressiveLoad: true,
           splatAlphaRemovalThreshold: safeNumber(
             activeScene.alphaRemovalThreshold ?? payload.alphaRemovalThreshold,
             8,

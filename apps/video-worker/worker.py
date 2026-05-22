@@ -22,8 +22,8 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "uploads")
 OPEN_SPLAT_BIN = os.getenv("OPEN_SPLAT_BIN", "opensplat")
 WORKER_POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "10"))
-FRAME_RATE = float(os.getenv("FRAME_RATE", "1.8"))
-MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1600"))
+FRAME_RATE = float(os.getenv("FRAME_RATE", "2.6"))
+MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1920"))
 SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "30000"))
 SPLAT_DENSIFY_GRAD_THRESH = os.getenv("SPLAT_DENSIFY_GRAD_THRESH", "0.00016")
 SPLAT_SSIM_WEIGHT = os.getenv("SPLAT_SSIM_WEIGHT", "0.3")
@@ -46,8 +46,9 @@ PLY_OUTLIER_QUANTILE_LOW = float(os.getenv("PLY_OUTLIER_QUANTILE_LOW", "0.02"))
 PLY_OUTLIER_QUANTILE_HIGH = float(os.getenv("PLY_OUTLIER_QUANTILE_HIGH", "0.98"))
 MIN_SCENE_FRAMES = int(os.getenv("MIN_SCENE_FRAMES", "45"))
 MAX_SCENE_FRAMES = int(os.getenv("MAX_SCENE_FRAMES", "180"))
-MAX_FALLBACK_SCENE_FRAMES = int(os.getenv("MAX_FALLBACK_SCENE_FRAMES", "96"))
+MAX_FALLBACK_SCENE_FRAMES = int(os.getenv("MAX_FALLBACK_SCENE_FRAMES", "120"))
 FRAME_QUALITY_DROP_RATIO = float(os.getenv("FRAME_QUALITY_DROP_RATIO", "0.12"))
+FRAME_SHARPNESS_SELECTION = os.getenv("FRAME_SHARPNESS_SELECTION", "1").lower() in ("1", "true", "yes")
 MAX_SCENES_PER_TOUR = int(os.getenv("MAX_SCENES_PER_TOUR", "8"))
 VIDEO_SCENE_MODE = os.getenv("VIDEO_SCENE_MODE", "grouped").lower()
 SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "10000"))
@@ -654,26 +655,68 @@ def clip_key_from_frame(frame):
 
 
 def select_representative_frames(frames, target_count):
+    frames = sorted(frames)
     if target_count <= 0 or len(frames) <= target_count:
         return set(frames)
 
-    weighted_frames = [
-        (frame, frame.stat().st_size if frame.exists() else 0)
-        for frame in frames
-    ]
-    weighted_frames.sort(key=lambda item: item[1])
+    scores = {frame: score_frame_quality(frame) for frame in frames}
+    sorted_scores = sorted(scores.values())
+    drop_count = int(len(sorted_scores) * FRAME_QUALITY_DROP_RATIO)
+    quality_floor = sorted_scores[drop_count] if sorted_scores else 0.0
 
-    drop_count = int(len(weighted_frames) * FRAME_QUALITY_DROP_RATIO)
-    candidates = [frame for frame, _ in weighted_frames[drop_count:]] or frames
-    candidates = sorted(candidates)
+    def best_frame(bucket):
+        viable = [frame for frame in bucket if scores.get(frame, 0.0) >= quality_floor]
+        return max(viable or bucket, key=lambda frame: scores.get(frame, 0.0))
 
     keep = set()
     for index in range(target_count):
-        start = round(index * len(candidates) / target_count)
-        end = round((index + 1) * len(candidates) / target_count)
-        bucket = candidates[start:max(start + 1, end)]
-        keep.add(max(bucket, key=lambda path: path.stat().st_size if path.exists() else 0))
+        start = round(index * len(frames) / target_count)
+        end = round((index + 1) * len(frames) / target_count)
+        bucket = frames[start:max(start + 1, end)]
+        keep.add(best_frame(bucket))
     return keep
+
+
+def score_frame_quality(frame):
+    fallback = float(frame.stat().st_size if frame.exists() else 0)
+    if not FRAME_SHARPNESS_SELECTION:
+        return fallback
+
+    try:
+        import cv2
+    except Exception:
+        return fallback
+
+    try:
+        image = cv2.imread(str(frame), cv2.IMREAD_GRAYSCALE)
+        if image is None or image.size == 0:
+            return fallback
+
+        height, width = image.shape[:2]
+        scale = min(1.0, 720 / max(width, height))
+        if scale < 1.0:
+            image = cv2.resize(
+                image,
+                (max(1, int(width * scale)), max(1, int(height * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        sharpness = float(cv2.Laplacian(image, cv2.CV_64F).var())
+        mean, stddev = cv2.meanStdDev(image)
+        brightness = float(mean[0][0])
+        contrast = float(stddev[0][0])
+
+        exposure_penalty = 1.0
+        if brightness < 35 or brightness > 225:
+            exposure_penalty = 0.45
+        elif brightness < 55 or brightness > 205:
+            exposure_penalty = 0.75
+
+        contrast_multiplier = max(0.45, min(1.35, contrast / 42.0))
+        size_tiebreaker = fallback / 250000.0
+        return (sharpness * exposure_penalty * contrast_multiplier) + size_tiebreaker
+    except Exception:
+        return fallback
 
 
 def limit_scene_frames(images_dir, max_frames=MAX_SCENE_FRAMES):
@@ -708,7 +751,7 @@ def limit_scene_frames(images_dir, max_frames=MAX_SCENE_FRAMES):
 
     kept_count = len(ordered_keep)
     print(
-        f"Selected {kept_count} balanced frames from {frame_count} extracted frames across {clip_count} clips",
+        f"Selected {kept_count} sharp balanced frames from {frame_count} extracted frames across {clip_count} clips",
         flush=True,
     )
     return kept_count
