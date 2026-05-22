@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Clock3, Loader2, Video, XCircle } from "lucide-react";
 import { ModalShell } from "./ModalShell";
@@ -11,6 +11,10 @@ import {
 const SUPPORTED_EXTENSIONS = new Set(["mp4", "mov", "m4v"]);
 const DEFAULT_TOTAL_MS = 90 * 60 * 1000;
 const MAX_VIDEO_BYTES = 750 * 1024 * 1024;
+const MIN_VIDEO_WIDTH = 1280;
+const MIN_VIDEO_HEIGHT = 720;
+const MIN_VIDEO_DURATION_SECONDS = 25;
+const MIN_VIDEO_BITRATE_MBPS = 2.5;
 
 function extensionFromName(name) {
   return String(name || "").split(".").pop()?.toLowerCase().trim() || "";
@@ -32,8 +36,74 @@ function formatFileSize(bytes) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function formatVideoDuration(seconds) {
+  const n = Number(seconds || 0);
+  if (!Number.isFinite(n) || n <= 0) return "unknown length";
+  const minutes = Math.floor(n / 60);
+  const rest = Math.round(n % 60);
+  return minutes ? `${minutes}m ${rest}s` : `${rest}s`;
+}
+
+function formatBitrate(mbps) {
+  const n = Number(mbps || 0);
+  if (!Number.isFinite(n) || n <= 0) return "unknown bitrate";
+  return `${n.toFixed(1)} Mbps`;
+}
+
 function fileListFromInput(fileList) {
   return Array.from(fileList || []);
+}
+
+function inspectVideoFile(file) {
+  return new Promise((resolve) => {
+    if (typeof document === "undefined") {
+      resolve({ file, warnings: [] });
+      return;
+    }
+
+    const url = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+
+    const finish = (result) => {
+      URL.revokeObjectURL(url);
+      resolve(result);
+    };
+
+    video.onloadedmetadata = () => {
+      const width = Number(video.videoWidth || 0);
+      const height = Number(video.videoHeight || 0);
+      const duration = Number(video.duration || 0);
+      const bitrateMbps =
+        duration > 0 ? (Number(file.size || 0) * 8) / duration / 1000 / 1000 : 0;
+      const warnings = [];
+
+      if (width > 0 && height > 0 && height > width) {
+        warnings.push("record in landscape mode");
+      }
+      if (width < MIN_VIDEO_WIDTH || height < MIN_VIDEO_HEIGHT) {
+        warnings.push(`use at least ${MIN_VIDEO_WIDTH}x${MIN_VIDEO_HEIGHT} resolution`);
+      }
+      if (duration < MIN_VIDEO_DURATION_SECONDS) {
+        warnings.push(`record at least ${MIN_VIDEO_DURATION_SECONDS} seconds`);
+      }
+      if (bitrateMbps < MIN_VIDEO_BITRATE_MBPS) {
+        warnings.push(`export at ${MIN_VIDEO_BITRATE_MBPS} Mbps or higher`);
+      }
+
+      finish({ file, width, height, duration, bitrateMbps, warnings });
+    };
+
+    video.onerror = () => {
+      finish({
+        file,
+        warnings: ["this video could not be inspected before upload"],
+      });
+    };
+
+    video.src = url;
+  });
 }
 
 function uploadLargeVideo(file, onProgress) {
@@ -139,6 +209,8 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
   const [error, setError] = useState("");
   const [jobId, setJobId] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [videoChecks, setVideoChecks] = useState([]);
+  const [checkingVideos, setCheckingVideos] = useState(false);
 
   const totalFileSize = useMemo(
     () => files.reduce((sum, item) => sum + Number(item?.size || 0), 0),
@@ -150,6 +222,33 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
   );
   const uploadLoading = status === "uploading";
   const disableActions = status === "uploading" || status === "starting";
+  const videoWarnings = useMemo(
+    () => videoChecks.filter((item) => item.warnings?.length),
+    [videoChecks],
+  );
+  const hasVideoWarnings = videoWarnings.length > 0;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!files.length) {
+      setVideoChecks([]);
+      setCheckingVideos(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setCheckingVideos(true);
+    Promise.all(files.map((file) => inspectVideoFile(file))).then((results) => {
+      if (cancelled) return;
+      setVideoChecks(results);
+      setCheckingVideos(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [files]);
 
   const { data: jobData } = useQuery({
     queryKey: ["video-3d-tour-job", jobId],
@@ -226,6 +325,21 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
       return;
     }
 
+    if (checkingVideos) {
+      setStatus("error");
+      setError("Video checks are still running. Please wait a moment.");
+      return;
+    }
+
+    if (hasVideoWarnings) {
+      const first = videoWarnings[0];
+      setStatus("error");
+      setError(
+        `${first.file.name} is not ready for a sellable 3D tour yet: ${first.warnings.join(", ")}.`,
+      );
+      return;
+    }
+
     setStatus("uploading");
     setUploadProgress(0);
     setError("");
@@ -286,7 +400,16 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
         err instanceof Error ? err.message : "Could not start the 3D tour.",
       );
     }
-  }, [files, propertyId, queryClient, totalFileSize, userId]);
+  }, [
+    checkingVideos,
+    files,
+    hasVideoWarnings,
+    propertyId,
+    queryClient,
+    totalFileSize,
+    userId,
+    videoWarnings,
+  ]);
 
   if (!open) return null;
 
@@ -397,6 +520,46 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
               </ol>
             </div>
           ) : null}
+          {checkingVideos ? (
+            <div className="mt-3 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Checking video quality...
+            </div>
+          ) : null}
+          {!checkingVideos && files.length && videoChecks.length ? (
+            <div className="mt-3 space-y-2">
+              {videoChecks.map((item) => {
+                const ready = !item.warnings?.length;
+                return (
+                  <div
+                    key={`${item.file.name}-${item.file.size}-${item.file.lastModified}-check`}
+                    className={`rounded-md border px-3 py-2 text-xs font-jetbrains-mono ${
+                      ready
+                        ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
+                        : "border-red-500/30 bg-red-500/5 text-red-700 dark:text-red-300"
+                    }`}
+                  >
+                    <div className="font-semibold">
+                      {ready ? "Ready" : "Needs a better recording"}:{" "}
+                      {item.file.name}
+                    </div>
+                    <div className="mt-1 text-gray-500 dark:text-gray-400">
+                      {item.width && item.height
+                        ? `${item.width}x${item.height}`
+                        : "unknown size"}
+                      {" - "}
+                      {formatVideoDuration(item.duration)}
+                      {" - "}
+                      {formatBitrate(item.bitrateMbps)}
+                    </div>
+                    {!ready ? (
+                      <div className="mt-1">{item.warnings.join(", ")}.</div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
 
         {jobId || uploadLoading || status === "starting" ? (
@@ -486,7 +649,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
             <button
               type="button"
               onClick={onStart}
-              disabled={disableActions || !!jobId}
+              disabled={disableActions || !!jobId || checkingVideos || hasVideoWarnings}
               className="inline-flex items-center px-3 py-2 rounded-lg bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-200 disabled:opacity-50 font-jetbrains-mono"
             >
               Start 3D Tour
