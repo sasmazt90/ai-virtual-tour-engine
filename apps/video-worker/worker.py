@@ -24,7 +24,7 @@ OPEN_SPLAT_BIN = os.getenv("OPEN_SPLAT_BIN", "opensplat")
 WORKER_POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "10"))
 FRAME_RATE = float(os.getenv("FRAME_RATE", "2.6"))
 MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1920"))
-SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "30000"))
+SPLAT_ITERATIONS = int(os.getenv("SPLAT_ITERATIONS", "15000"))
 SPLAT_DENSIFY_GRAD_THRESH = os.getenv("SPLAT_DENSIFY_GRAD_THRESH", "0.00016")
 SPLAT_SSIM_WEIGHT = os.getenv("SPLAT_SSIM_WEIGHT", "0.3")
 MIN_REGISTERED_IMAGES = int(os.getenv("MIN_REGISTERED_IMAGES", "90"))
@@ -38,8 +38,8 @@ MIN_CAMERA_SPREAD_RATIO = float(os.getenv("MIN_CAMERA_SPREAD_RATIO", "0.04"))
 MIN_OPAQUE_SPLAT_RATIO = float(os.getenv("MIN_OPAQUE_SPLAT_RATIO", "0.18"))
 MAX_SPLAT_SCALE_P95 = float(os.getenv("MAX_SPLAT_SCALE_P95", "0.065"))
 MAX_SPLAT_OUTLIER_RATIO = float(os.getenv("MAX_SPLAT_OUTLIER_RATIO", "3.5"))
-MAX_OUTPUT_SPLATS = int(os.getenv("MAX_OUTPUT_SPLATS", "450000"))
-MAX_OUTPUT_FILE_MB = float(os.getenv("MAX_OUTPUT_FILE_MB", "110"))
+MAX_OUTPUT_SPLATS = int(os.getenv("MAX_OUTPUT_SPLATS", "180000"))
+MAX_OUTPUT_FILE_MB = float(os.getenv("MAX_OUTPUT_FILE_MB", "45"))
 PLY_MIN_OPACITY = float(os.getenv("PLY_MIN_OPACITY", "0.32"))
 PLY_MAX_SCALE = float(os.getenv("PLY_MAX_SCALE", "0.065"))
 PLY_OUTLIER_QUANTILE_LOW = float(os.getenv("PLY_OUTLIER_QUANTILE_LOW", "0.02"))
@@ -50,6 +50,7 @@ MAX_FALLBACK_SCENE_FRAMES = int(os.getenv("MAX_FALLBACK_SCENE_FRAMES", "120"))
 FRAME_QUALITY_DROP_RATIO = float(os.getenv("FRAME_QUALITY_DROP_RATIO", "0.12"))
 FRAME_SHARPNESS_SELECTION = os.getenv("FRAME_SHARPNESS_SELECTION", "1").lower() in ("1", "true", "yes")
 MAX_SCENES_PER_TOUR = int(os.getenv("MAX_SCENES_PER_TOUR", "8"))
+INCLUDE_PLACEHOLDER_SCENES = os.getenv("INCLUDE_PLACEHOLDER_SCENES", "1").lower() in ("1", "true", "yes")
 VIDEO_SCENE_MODE = os.getenv("VIDEO_SCENE_MODE", "grouped").lower()
 SIFT_MAX_NUM_FEATURES = int(os.getenv("SIFT_MAX_NUM_FEATURES", "10000"))
 SIFT_PEAK_THRESHOLD = os.getenv("SIFT_PEAK_THRESHOLD", "0.0015")
@@ -72,6 +73,38 @@ REQUIRE_LANDSCAPE_VIDEO = os.getenv("REQUIRE_LANDSCAPE_VIDEO", "1").lower() in (
 
 class ReconstructionQualityError(RuntimeError):
     pass
+
+
+def public_quality_reason(error):
+    raw = str(error or "").strip()
+    lowered = raw.lower()
+    if not raw:
+        return "The video did not contain enough reliable detail for this area."
+    if "not enough usable video frames" in lowered:
+        return "This area did not have enough usable video frames."
+    if "sparse model" in lowered or "registered images" in lowered or "not enough matched images" in lowered:
+        return "This area did not have enough overlapping visual detail."
+    if "too blurred" in lowered or "visible 3d detail" in lowered or "outliers" in lowered:
+        return "This area was too blurred or inconsistent for a reliable 3D scan."
+    if "too large" in lowered:
+        return "This area produced a file that was too large for a fast web tour."
+    return "This area could not be reconstructed reliably from the uploaded video."
+
+
+def placeholder_scene(scene, error=None):
+    return {
+        "key": f"{scene.get('key') or 'area'}-outline",
+        "title": scene.get("title") or "Area outline",
+        "type": "placeholder",
+        "format": "flat_room",
+        "fallbackType": "flat_room",
+        "videoCount": len(scene.get("videos") or []),
+        "message": "Shown as a clean room outline because this area needs a clearer scan.",
+        "quality": {
+            "profile": "outline",
+            "reason": public_quality_reason(error),
+        },
+    }
 
 
 def run(cmd, cwd=None, heartbeat=None):
@@ -1330,22 +1363,30 @@ def upload_result(path):
 
 def save_virtual_tour(conn, job, scenes, skipped_scenes=None):
     request_payload = job.get("request_payload") or {}
-    primary_scene = scenes[0]
+    primary_scene = next((scene for scene in scenes if scene.get("fileUrl")), scenes[0])
+    real_scene_count = sum(1 for scene in scenes if scene.get("fileUrl"))
+    placeholder_scene_count = sum(
+        1
+        for scene in scenes
+        if scene.get("fallbackType") == "flat_room" or scene.get("type") == "placeholder"
+    )
     payload = {
         "type": "splat3d",
-        "fileUrl": primary_scene["fileUrl"],
-        "format": primary_scene["format"],
+        "fileUrl": primary_scene.get("fileUrl", ""),
+        "format": primary_scene.get("format", "ply"),
         "alphaRemovalThreshold": 8,
         "sourceType": "original",
         "generatedFrom": request_payload.get("captureType") or "iphone_video",
         "jobId": str(job["id"]),
         "videoCount": request_payload.get("videoCount") or 1,
         "sceneCount": len(scenes),
+        "realSceneCount": real_scene_count,
+        "placeholderSceneCount": placeholder_scene_count,
         "scenes": scenes,
         "skippedScenes": skipped_scenes or [],
         "quality": {
-            **primary_scene["quality"],
-            "profile": "validated",
+            **(primary_scene.get("quality") or {}),
+            "profile": "validated_partial" if placeholder_scene_count else "validated",
         },
     }
     with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
@@ -1425,10 +1466,11 @@ def process_job(conn, job):
             try:
                 scenes.append(process_scene(conn, job, scene, work_dir, start, end))
             except Exception as exc:
+                fallback_success = False
                 skipped_scenes.append({
                     "key": scene["key"],
                     "title": scene["title"],
-                    "error": str(exc),
+                    "error": public_quality_reason(exc),
                 })
                 print(f"Scene skipped: {scene['title']}: {exc}", flush=True)
                 fallback_scenes = fallback_scenes_for_group(scene)
@@ -1453,19 +1495,27 @@ def process_job(conn, job):
                                 fallback_end,
                             )
                         )
+                        fallback_success = True
                     except Exception as fallback_exc:
                         skipped_scenes.append({
                             "key": fallback_scene["key"],
                             "title": fallback_scene["title"],
-                            "error": str(fallback_exc),
+                            "error": public_quality_reason(fallback_exc),
                             "fallbackOf": scene["key"],
                         })
                         print(
                             f"Fallback scene skipped: {fallback_scene['title']}: {fallback_exc}",
                             flush=True,
                         )
+                if (
+                    INCLUDE_PLACEHOLDER_SCENES
+                    and not fallback_success
+                    and len(scenes) < MAX_SCENES_PER_TOUR
+                ):
+                    scenes.append(placeholder_scene(scene, exc))
 
-        if not scenes:
+        real_scenes = [scene for scene in scenes if scene.get("fileUrl")]
+        if not real_scenes:
             first_reason = next(
                 (
                     str(item.get("error"))
@@ -1500,8 +1550,10 @@ def process_job(conn, job):
             progress=100,
             result={
                 "tourId": str(tour_id),
-                "fileUrl": scenes[0]["fileUrl"],
+                "fileUrl": real_scenes[0]["fileUrl"],
                 "sceneCount": len(scenes),
+                "realSceneCount": len(real_scenes),
+                "placeholderSceneCount": len(scenes) - len(real_scenes),
                 "scenes": scenes,
                 "skippedScenes": skipped_scenes,
             },

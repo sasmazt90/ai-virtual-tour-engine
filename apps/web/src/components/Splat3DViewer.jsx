@@ -126,6 +126,123 @@ async function fitCameraToScene(viewer, preferredCamera) {
   return count;
 }
 
+async function renderFlatRoomScene(root) {
+  const THREE = await import("three");
+  const { OrbitControls } = await import(
+    "three/examples/jsm/controls/OrbitControls.js"
+  );
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x111318);
+
+  const width = root.clientWidth || 960;
+  const height = root.clientHeight || 540;
+  const camera = new THREE.PerspectiveCamera(48, width / height, 0.01, 100);
+  camera.position.set(3.2, 2.2, 4.2);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  renderer.setSize(width, height);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  root.appendChild(renderer.domElement);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 1.15, 0);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 2.1;
+  controls.maxDistance = 8;
+  controls.update();
+
+  const wallMaterial = new THREE.MeshStandardMaterial({
+    color: 0xd8d4cc,
+    roughness: 0.92,
+    metalness: 0.0,
+  });
+  const sideMaterial = new THREE.MeshStandardMaterial({
+    color: 0xc9c5bd,
+    roughness: 0.95,
+    metalness: 0.0,
+  });
+  const floorMaterial = new THREE.MeshStandardMaterial({
+    color: 0xa69f94,
+    roughness: 0.85,
+    metalness: 0.0,
+  });
+
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(6, 5), floorMaterial);
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(0, 0, 0.35);
+  scene.add(floor);
+
+  const backWall = new THREE.Mesh(new THREE.PlaneGeometry(6, 2.8), wallMaterial);
+  backWall.position.set(0, 1.4, -2.15);
+  scene.add(backWall);
+
+  const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(5, 2.8), sideMaterial);
+  leftWall.rotation.y = Math.PI / 2;
+  leftWall.position.set(-3, 1.4, 0.35);
+  scene.add(leftWall);
+
+  const rightWall = new THREE.Mesh(new THREE.PlaneGeometry(5, 2.8), sideMaterial);
+  rightWall.rotation.y = -Math.PI / 2;
+  rightWall.position.set(3, 1.4, 0.35);
+  scene.add(rightWall);
+
+  const grid = new THREE.GridHelper(6, 12, 0x5d6470, 0x3a4048);
+  grid.position.y = 0.006;
+  scene.add(grid);
+
+  const ambient = new THREE.HemisphereLight(0xffffff, 0x2b3038, 2.3);
+  scene.add(ambient);
+
+  const key = new THREE.DirectionalLight(0xffffff, 2.2);
+  key.position.set(3, 4, 3);
+  scene.add(key);
+
+  let frameId = 0;
+  let disposed = false;
+
+  function resize() {
+    if (disposed) return;
+    const nextWidth = root.clientWidth || width;
+    const nextHeight = root.clientHeight || height;
+    camera.aspect = nextWidth / nextHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(nextWidth, nextHeight);
+  }
+
+  function animate() {
+    if (disposed) return;
+    controls.update();
+    renderer.render(scene, camera);
+    frameId = window.requestAnimationFrame(animate);
+  }
+
+  window.addEventListener("resize", resize);
+  animate();
+
+  return {
+    dispose() {
+      disposed = true;
+      window.removeEventListener("resize", resize);
+      if (frameId) window.cancelAnimationFrame(frameId);
+      controls.dispose();
+      scene.traverse((object) => {
+        if (object.geometry) object.geometry.dispose?.();
+        const material = object.material;
+        if (Array.isArray(material)) {
+          material.forEach((item) => item.dispose?.());
+        } else {
+          material?.dispose?.();
+        }
+      });
+      renderer.dispose();
+      renderer.domElement.remove();
+    },
+  };
+}
+
 export default function Splat3DViewer({ tourPayload, height }) {
   const rootRef = useRef(null);
   const viewerRef = useRef(null);
@@ -136,7 +253,14 @@ export default function Splat3DViewer({ tourPayload, height }) {
   const payload = useMemo(() => tourPayload || {}, [tourPayload]);
   const scenes = useMemo(() => {
     const list = Array.isArray(payload.scenes)
-      ? payload.scenes.filter((scene) => scene?.fileUrl || scene?.url || scene?.src)
+      ? payload.scenes.filter(
+          (scene) =>
+            scene?.fileUrl ||
+            scene?.url ||
+            scene?.src ||
+            scene?.fallbackType === "flat_room" ||
+            scene?.type === "placeholder",
+        )
       : [];
 
     if (list.length) return list;
@@ -153,6 +277,8 @@ export default function Splat3DViewer({ tourPayload, height }) {
   const fileUrl = activeScene.fileUrl || activeScene.url || activeScene.src || "";
   const format = activeScene.format || payload.format || "";
   const camera = activeScene.camera || payload.camera || {};
+  const isPlaceholder =
+    activeScene.fallbackType === "flat_room" || activeScene.type === "placeholder";
   const containerHeight = height ?? 480;
 
   useEffect(() => {
@@ -164,7 +290,7 @@ export default function Splat3DViewer({ tourPayload, height }) {
 
     async function load() {
       const root = rootRef.current;
-      if (!root || !fileUrl) {
+      if (!root || (!fileUrl && !isPlaceholder)) {
         setStatus("error");
         setError("No 3D tour file is attached to this tour.");
         return;
@@ -175,6 +301,17 @@ export default function Splat3DViewer({ tourPayload, height }) {
       root.innerHTML = "";
 
       try {
+        if (isPlaceholder) {
+          const viewer = await renderFlatRoomScene(root);
+          if (cancelled) {
+            viewer.dispose();
+            return;
+          }
+          viewerRef.current = viewer;
+          setStatus("ready");
+          return;
+        }
+
         const GaussianSplats3D = await import(
           "@mkkellogg/gaussian-splats-3d"
         );
@@ -252,10 +389,15 @@ export default function Splat3DViewer({ tourPayload, height }) {
       const viewer = viewerRef.current;
       viewerRef.current = null;
       if (viewer) {
-        viewer.dispose().catch(() => {});
+        try {
+          const result = viewer.dispose();
+          result?.catch?.(() => {});
+        } catch {
+          // Ignore teardown errors while React is replacing the viewer.
+        }
       }
     };
-  }, [camera.lookAt, camera.position, camera.up, fileUrl, format]);
+  }, [camera.lookAt, camera.position, camera.up, fileUrl, format, isPlaceholder]);
 
   return (
     <div
@@ -279,6 +421,13 @@ export default function Splat3DViewer({ tourPayload, height }) {
       {status === "ready" ? (
         <div className="pointer-events-none absolute left-3 bottom-3 rounded-md bg-black/55 px-3 py-2 text-xs text-white font-jetbrains-mono">
           Drag to orbit - right-drag to pan - scroll to zoom
+        </div>
+      ) : null}
+
+      {status === "ready" && isPlaceholder ? (
+        <div className="pointer-events-none absolute right-3 bottom-3 max-w-xs rounded-md bg-black/60 px-3 py-2 text-xs leading-relaxed text-white font-jetbrains-mono">
+          {activeScene.message ||
+            "This area is shown as a clean room outline because the scan needs clearer video."}
         </div>
       ) : null}
 
