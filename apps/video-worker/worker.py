@@ -43,6 +43,7 @@ PLY_OUTLIER_QUANTILE_LOW = float(os.getenv("PLY_OUTLIER_QUANTILE_LOW", "0.02"))
 PLY_OUTLIER_QUANTILE_HIGH = float(os.getenv("PLY_OUTLIER_QUANTILE_HIGH", "0.98"))
 MIN_SCENE_FRAMES = int(os.getenv("MIN_SCENE_FRAMES", "45"))
 MAX_SCENE_FRAMES = int(os.getenv("MAX_SCENE_FRAMES", "180"))
+MAX_FALLBACK_SCENE_FRAMES = int(os.getenv("MAX_FALLBACK_SCENE_FRAMES", "72"))
 FRAME_QUALITY_DROP_RATIO = float(os.getenv("FRAME_QUALITY_DROP_RATIO", "0.12"))
 MAX_SCENES_PER_TOUR = int(os.getenv("MAX_SCENES_PER_TOUR", "8"))
 VIDEO_SCENE_MODE = os.getenv("VIDEO_SCENE_MODE", "grouped").lower()
@@ -52,6 +53,7 @@ SIFT_EDGE_THRESHOLD = os.getenv("SIFT_EDGE_THRESHOLD", "10")
 SEQUENTIAL_MATCH_OVERLAP = int(os.getenv("SEQUENTIAL_MATCH_OVERLAP", "20"))
 EXHAUSTIVE_MATCH_MAX_FRAMES = int(os.getenv("EXHAUSTIVE_MATCH_MAX_FRAMES", "220"))
 RUN_EXHAUSTIVE_MATCHING = os.getenv("RUN_EXHAUSTIVE_MATCHING", "0").lower() in ("1", "true", "yes")
+AUTO_EXHAUSTIVE_MULTICLIP = os.getenv("AUTO_EXHAUSTIVE_MULTICLIP", "1").lower() in ("1", "true", "yes")
 COLMAP_USE_GPU = os.getenv("COLMAP_USE_GPU", "0")
 MIN_VIDEO_WIDTH = int(os.getenv("MIN_VIDEO_WIDTH", "1280"))
 MIN_VIDEO_HEIGHT = int(os.getenv("MIN_VIDEO_HEIGHT", "720"))
@@ -539,7 +541,7 @@ def fallback_scenes_for_group(scene):
     ]
 
 
-def run_colmap(images_dir, work_dir, heartbeat=None):
+def run_colmap(images_dir, work_dir, heartbeat=None, exhaustive_matching=False):
     db_path = work_dir / "colmap.db"
     sparse_dir = work_dir / "sparse"
     sparse_dir.mkdir(parents=True, exist_ok=True)
@@ -575,7 +577,11 @@ def run_colmap(images_dir, work_dir, heartbeat=None):
         "--SequentialMatching.overlap",
         str(SEQUENTIAL_MATCH_OVERLAP),
     ], heartbeat=heartbeat)
-    if RUN_EXHAUSTIVE_MATCHING and frame_count <= EXHAUSTIVE_MATCH_MAX_FRAMES:
+    should_run_exhaustive = (
+        (RUN_EXHAUSTIVE_MATCHING or exhaustive_matching)
+        and frame_count <= EXHAUSTIVE_MATCH_MAX_FRAMES
+    )
+    if should_run_exhaustive:
         run([
             "colmap",
             "exhaustive_matcher",
@@ -586,6 +592,12 @@ def run_colmap(images_dir, work_dir, heartbeat=None):
             "--SiftMatching.guided_matching",
             "1",
         ], heartbeat=heartbeat)
+    elif (RUN_EXHAUSTIVE_MATCHING or exhaustive_matching):
+        print(
+            f"Skipping exhaustive matching for {frame_count} frames "
+            f"(limit {EXHAUSTIVE_MATCH_MAX_FRAMES}).",
+            flush=True,
+        )
     run([
         "colmap",
         "mapper",
@@ -1141,7 +1153,10 @@ def process_scene(conn, job, scene, base_work_dir, progress_start, progress_end)
 
     update_job(conn, job["id"], progress=progress_start)
     extract_video_set(scene["videos"], scene_dir, images_dir)
-    frame_count = limit_scene_frames(images_dir)
+    scene_video_count = len(scene.get("videos") or [])
+    is_fallback = bool(scene.get("fallbackOf"))
+    frame_limit = MAX_FALLBACK_SCENE_FRAMES if is_fallback else MAX_SCENE_FRAMES
+    frame_count = limit_scene_frames(images_dir, max_frames=frame_limit)
     if frame_count < MIN_SCENE_FRAMES:
         raise ReconstructionQualityError(
             f"{scene['title']} does not have enough usable video frames for a reliable 3D tour."
@@ -1151,7 +1166,13 @@ def process_scene(conn, job, scene, base_work_dir, progress_start, progress_end)
     def heartbeat():
         update_job(conn, job["id"], progress=progress_start + int((progress_end - progress_start) * 0.25))
 
-    model_dir = run_colmap(images_dir, scene_dir, heartbeat=heartbeat)
+    exhaustive_matching = AUTO_EXHAUSTIVE_MULTICLIP and scene_video_count > 1
+    model_dir = run_colmap(
+        images_dir,
+        scene_dir,
+        heartbeat=heartbeat,
+        exhaustive_matching=exhaustive_matching,
+    )
     model_stats = analyze_colmap_model(model_dir, scene_dir)
     assert_geometry_quality(frame_count, model_stats)
 
