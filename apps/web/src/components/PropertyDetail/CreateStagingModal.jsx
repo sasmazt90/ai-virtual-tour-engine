@@ -245,7 +245,7 @@ export default function CreateStagingModal({
 
   const jobLine = jobStatus
     ? `${jobStatusLabel} - ${Number(jobProgress || 0)}%`
-    : jobStatusLabel;
+    : "";
 
   const retryJobMutation = useMutation({
     mutationFn: async (id) => {
@@ -793,7 +793,7 @@ export default function CreateStagingModal({
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
-            {jobLine}
+            {jobLine ? <div>{jobLine}</div> : null}
             {jobError ? (
               <div className="mt-1 text-xs text-red-600 dark:text-red-400 font-jetbrains-mono">
                 We could not create this staging. Try again with a clearer

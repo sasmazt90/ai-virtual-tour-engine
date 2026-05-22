@@ -52,6 +52,11 @@ SEQUENTIAL_MATCH_OVERLAP = int(os.getenv("SEQUENTIAL_MATCH_OVERLAP", "20"))
 EXHAUSTIVE_MATCH_MAX_FRAMES = int(os.getenv("EXHAUSTIVE_MATCH_MAX_FRAMES", "220"))
 RUN_EXHAUSTIVE_MATCHING = os.getenv("RUN_EXHAUSTIVE_MATCHING", "0").lower() in ("1", "true", "yes")
 COLMAP_USE_GPU = os.getenv("COLMAP_USE_GPU", "0")
+MIN_VIDEO_WIDTH = int(os.getenv("MIN_VIDEO_WIDTH", "1280"))
+MIN_VIDEO_HEIGHT = int(os.getenv("MIN_VIDEO_HEIGHT", "720"))
+MIN_VIDEO_DURATION_SECONDS = float(os.getenv("MIN_VIDEO_DURATION_SECONDS", "25"))
+MIN_VIDEO_BITRATE_MBPS = float(os.getenv("MIN_VIDEO_BITRATE_MBPS", "2.5"))
+REQUIRE_LANDSCAPE_VIDEO = os.getenv("REQUIRE_LANDSCAPE_VIDEO", "1").lower() in ("1", "true", "yes")
 
 
 class ReconstructionQualityError(RuntimeError):
@@ -81,6 +86,18 @@ def run(cmd, cwd=None, heartbeat=None):
             heartbeat()
             last_heartbeat = time.monotonic()
         time.sleep(1)
+
+
+def run_capture(cmd):
+    run_cmd = [str(c) for c in cmd]
+    completed = subprocess.run(
+        run_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=True,
+    )
+    return completed.stdout
 
 
 def quantile(values, q, fallback=0.0):
@@ -284,6 +301,100 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
+def normalize_rotation(value):
+    try:
+        rotation = int(round(float(value)))
+    except (TypeError, ValueError):
+        return 0
+    return abs(rotation) % 360
+
+
+def video_rotation(stream):
+    tags = stream.get("tags") or {}
+    if tags.get("rotate") is not None:
+        return normalize_rotation(tags.get("rotate"))
+    for side_data in stream.get("side_data_list") or []:
+        if side_data.get("rotation") is not None:
+            return normalize_rotation(side_data.get("rotation"))
+    return 0
+
+
+def probe_video(path):
+    try:
+        raw = run_capture([
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,bit_rate:stream_tags=rotate:stream_side_data=rotation:format=duration,bit_rate",
+            "-of",
+            "json",
+            str(path),
+        ])
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        raise ReconstructionQualityError(
+            "The video could not be inspected. Please upload a standard iPhone .mp4 or .mov file."
+        ) from exc
+
+    try:
+        data = json.loads(raw or "{}")
+    except json.JSONDecodeError as exc:
+        raise ReconstructionQualityError(
+            "The video metadata could not be read. Please export the video again and retry."
+        ) from exc
+
+    streams = data.get("streams") or []
+    if not streams:
+        raise ReconstructionQualityError(
+            "The file does not contain a usable video stream."
+        )
+
+    stream = streams[0]
+    width = int(stream.get("width") or 0)
+    height = int(stream.get("height") or 0)
+    rotation = video_rotation(stream)
+    effective_width, effective_height = (height, width) if rotation in (90, 270) else (width, height)
+    format_data = data.get("format") or {}
+    duration = float(format_data.get("duration") or 0)
+    bitrate = int(stream.get("bit_rate") or format_data.get("bit_rate") or 0)
+
+    return {
+        "width": width,
+        "height": height,
+        "effectiveWidth": effective_width,
+        "effectiveHeight": effective_height,
+        "rotation": rotation,
+        "durationSeconds": duration,
+        "bitrateMbps": bitrate / 1_000_000 if bitrate else 0,
+    }
+
+
+def validate_video_capture(metadata, label):
+    failures = []
+    effective_width = int(metadata.get("effectiveWidth") or 0)
+    effective_height = int(metadata.get("effectiveHeight") or 0)
+    duration = float(metadata.get("durationSeconds") or 0)
+    bitrate = float(metadata.get("bitrateMbps") or 0)
+
+    if REQUIRE_LANDSCAPE_VIDEO and effective_width < effective_height:
+        failures.append("record in landscape mode")
+    if effective_width < MIN_VIDEO_WIDTH or effective_height < MIN_VIDEO_HEIGHT:
+        failures.append(f"use at least {MIN_VIDEO_WIDTH}x{MIN_VIDEO_HEIGHT} video")
+    if duration < MIN_VIDEO_DURATION_SECONDS:
+        failures.append(f"record at least {int(MIN_VIDEO_DURATION_SECONDS)} seconds per clip")
+    if bitrate and bitrate < MIN_VIDEO_BITRATE_MBPS:
+        failures.append(f"export with at least {MIN_VIDEO_BITRATE_MBPS:g} Mbps quality")
+
+    if failures:
+        raise ReconstructionQualityError(
+            f"{label} is not suitable for a sellable 3D tour yet. "
+            f"Please {', '.join(failures)}. "
+            "Walk slowly with steady side-to-side movement and keep clear overlap between clips."
+        )
+
+
 def extract_frames(video_path, images_dir, pattern="frame_%06d.jpg"):
     images_dir.mkdir(parents=True, exist_ok=True)
     vf = f"fps={FRAME_RATE},scale='min({MAX_IMAGE_SIZE},iw)':-2,setsar=1"
@@ -308,6 +419,7 @@ def extract_video_set(video_items, work_dir, images_dir):
     for index, item in enumerate(video_items, start=1):
         video_url = item["videoUrl"]
         video_path = work_dir / f"input_video_{index:03d}"
+        label = str(item.get("originalName") or f"Clip {index}")
         print(f"Downloading clip {index}/{video_count}", flush=True)
         download_video(video_url, video_path)
         content_hash = file_sha256(video_path)
@@ -315,6 +427,15 @@ def extract_video_set(video_items, work_dir, images_dir):
             print(f"Skipping duplicate clip {index}/{video_count}", flush=True)
             continue
         seen_hashes.add(content_hash)
+        metadata = probe_video(video_path)
+        print(
+            "Clip quality "
+            f"{index}/{video_count}: {metadata['effectiveWidth']}x{metadata['effectiveHeight']}, "
+            f"{metadata['durationSeconds']:.1f}s, {metadata['bitrateMbps']:.2f} Mbps, "
+            f"rotation {metadata['rotation']}",
+            flush=True,
+        )
+        validate_video_capture(metadata, label)
         extracted += 1
         update_pattern = f"clip{extracted:03d}_frame_%06d.jpg"
         print(f"Extracting frames from clip {index}/{video_count}", flush=True)
@@ -1242,6 +1363,14 @@ def process_job(conn, job):
                         )
 
         if not scenes:
+            first_reason = next(
+                (
+                    str(item.get("error"))
+                    for item in skipped_scenes
+                    if item.get("error")
+                ),
+                "",
+            )
             update_job(
                 conn,
                 job["id"],
@@ -1254,7 +1383,9 @@ def process_job(conn, job):
                     },
                 },
             )
-            raise ReconstructionQualityError("No reliable 3D scenes could be created from the uploaded videos.")
+            raise ReconstructionQualityError(
+                first_reason or "No reliable 3D scenes could be created from the uploaded videos."
+            )
 
         update_job(conn, job["id"], progress=95)
         tour_id = save_virtual_tour(conn, job, scenes, skipped_scenes)

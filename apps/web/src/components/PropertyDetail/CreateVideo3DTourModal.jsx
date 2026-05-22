@@ -122,7 +122,14 @@ function statusDescription({ status, uploadLoading }) {
 
 function userSafeJobError(rawError) {
   if (!rawError) return "";
-  return "The video could not be converted into a 3D tour. Please try a slower, well-lit walkthrough video.";
+  const text = String(rawError);
+  if (
+    text.includes("not suitable for a sellable 3D tour") ||
+    text.includes("not reliable enough for a sellable 3D tour")
+  ) {
+    return text;
+  }
+  return "The video could not be converted into a 3D tour. Please try a landscape, well-lit walkthrough video with slow movement and clear overlap between clips.";
 }
 
 export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
@@ -325,8 +332,8 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
                 Create from iPhone video
               </div>
               <p className="mt-1 text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
-                Upload one or more overlapping room videos. We will align them into an
-                interactive 3D tour for this property.
+                Upload one or more high-quality walkthrough videos. We will turn them
+                into an interactive 3D tour for this property.
               </p>
               <p className="mt-2 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
                 Credits are charged by total uploaded video size:{" "}
@@ -344,14 +351,16 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
             Instructions
           </div>
           <ul className="mt-2 space-y-2 text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono list-disc pl-5">
+            <li>Record in landscape mode at 1080p or 4K.</li>
+            <li>Use bright, even lighting and avoid dark corners.</li>
+            <li>Walk slowly; keep the phone steady at chest height.</li>
+            <li>Move through the room instead of standing still and turning in place.</li>
+            <li>Capture each wall or furniture area from more than one angle.</li>
             <li>Record one room or one connected area per video.</li>
-            <li>Upload videos in walking order: entry, corridor, room, next room.</li>
-            <li>Leave 5-10 seconds of overlap at the end of one clip and the start of the next clip.</li>
-            <li>Use landscape mode, preferably 4K or 1080p, with good lighting.</li>
-            <li>Walk slowly and keep the phone steady at chest height.</li>
-            <li>Move in a smooth loop and capture each wall or furniture area from more than one angle.</li>
-            <li>Avoid fast turns, blurry motion, dark corners, mirrors, windows, and people moving through the scene.</li>
-            <li>Keep the video between 1 and 3 minutes for best results.</li>
+            <li>Upload videos in walking order: entrance, hallway, room, next room.</li>
+            <li>Leave 5-10 seconds of overlap between connected clips.</li>
+            <li>Avoid fast turns, motion blur, mirrors, large windows, blank walls, and people moving through the scene.</li>
+            <li>Keep each clip around 45-90 seconds for best results.</li>
             <li>For the highest quality, upload a ready 3D tour file as a .ply, .splat or .ksplat file.</li>
           </ul>
         </div>
