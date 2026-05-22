@@ -1,10 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Upload } from "lucide-react";
+import { AI_VIDEO_3D_MAX_BYTES } from "@/app/api/utils/pricing";
 import { ModalShell } from "./ModalShell";
+import { uploadLargeFile } from "@/utils/largeUpload";
 
 const SUPPORTED_EXTENSIONS = new Set(["ply", "splat", "ksplat"]);
-const MAX_SCAN_BYTES = 750 * 1024 * 1024;
+const MAX_SCAN_BYTES = AI_VIDEO_3D_MAX_BYTES;
 
 function extensionFromName(name) {
   return String(name || "").split(".").pop()?.toLowerCase().trim() || "";
@@ -18,45 +20,9 @@ function formatFileSize(bytes) {
 }
 
 function uploadLargeScan(file, onProgress) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/upload/large");
-    xhr.setRequestHeader(
-      "Content-Type",
-      file.type || "application/octet-stream",
-    );
-    xhr.setRequestHeader("X-Filename", encodeURIComponent(file.name || "scan"));
-
-    xhr.upload.onprogress = (event) => {
-      if (!event.lengthComputable) return;
-      const progress = Math.round((event.loaded / event.total) * 100);
-      onProgress(Math.max(0, Math.min(100, progress)));
-    };
-
-    xhr.onload = () => {
-      let body = {};
-      try {
-        body = JSON.parse(xhr.responseText || "{}");
-      } catch {
-        body = {};
-      }
-
-      if (xhr.status >= 200 && xhr.status < 300 && body?.url) {
-        resolve(body);
-        return;
-      }
-
-      reject(
-        new Error(
-          body?.error ||
-            `3D tour upload failed: [${xhr.status}] ${xhr.statusText}`,
-        ),
-      );
-    };
-
-    xhr.onerror = () => reject(new Error("3D tour upload failed."));
-    xhr.onabort = () => reject(new Error("3D tour upload was cancelled."));
-    xhr.send(file);
+  return uploadLargeFile(file, {
+    fallbackName: "scan",
+    onProgress,
   });
 }
 

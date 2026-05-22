@@ -8,6 +8,7 @@ import {
   AI_VIDEO_3D_MAX_FILES,
   calculateVideo3DTourCreditCost,
 } from "@/app/api/utils/pricing";
+import { uploadLargeFile } from "@/utils/largeUpload";
 
 const SUPPORTED_EXTENSIONS = new Set(["mp4", "mov", "m4v"]);
 const DEFAULT_TOTAL_MS = 90 * 60 * 1000;
@@ -109,41 +110,9 @@ function inspectVideoFile(file) {
 }
 
 function uploadLargeVideo(file, onProgress) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/upload/large");
-    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
-    xhr.setRequestHeader("X-Filename", encodeURIComponent(file.name || "iphone-video"));
-
-    xhr.upload.onprogress = (event) => {
-      if (!event.lengthComputable) return;
-      onProgress(Math.round((event.loaded / event.total) * 100));
-    };
-
-    xhr.onload = () => {
-      let body = {};
-      try {
-        body = JSON.parse(xhr.responseText || "{}");
-      } catch {
-        body = {};
-      }
-
-      if (xhr.status >= 200 && xhr.status < 300 && body?.url) {
-        resolve(body);
-        return;
-      }
-
-      reject(
-        new Error(
-          body?.error ||
-            `Video upload failed: [${xhr.status}] ${xhr.statusText}`,
-        ),
-      );
-    };
-
-    xhr.onerror = () => reject(new Error("Video upload failed."));
-    xhr.onabort = () => reject(new Error("Video upload was cancelled."));
-    xhr.send(file);
+  return uploadLargeFile(file, {
+    fallbackName: "iphone-video",
+    onProgress,
   });
 }
 
