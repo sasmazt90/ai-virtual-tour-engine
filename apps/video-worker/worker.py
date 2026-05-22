@@ -8,6 +8,7 @@ import struct
 import subprocess
 import tempfile
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 
@@ -284,8 +285,21 @@ def refund_credits_if_needed(conn, job, reason):
         )
 
 
-def download_video(url, out_path):
-    with requests.get(url, stream=True, timeout=120) as res:
+def download_video(source, out_path):
+    parsed = urllib.parse.urlparse(str(source))
+    if parsed.scheme == "file":
+        local_path = Path(urllib.parse.unquote(parsed.path))
+        if not local_path.exists():
+            raise RuntimeError(f"Local video file does not exist: {local_path}")
+        shutil.copyfile(local_path, out_path)
+        return
+
+    local_path = Path(str(source))
+    if parsed.scheme == "" and local_path.exists():
+        shutil.copyfile(local_path, out_path)
+        return
+
+    with requests.get(source, stream=True, timeout=120) as res:
         res.raise_for_status()
         with open(out_path, "wb") as f:
             for chunk in res.iter_content(chunk_size=1024 * 1024):
@@ -327,8 +341,8 @@ def probe_video(path):
             "error",
             "-select_streams",
             "v:0",
-            "-show_entries",
-            "stream=width,height,bit_rate:stream_tags=rotate:stream_side_data=rotation:format=duration,bit_rate",
+            "-show_streams",
+            "-show_format",
             "-of",
             "json",
             str(path),
@@ -1288,7 +1302,7 @@ def process_job(conn, job):
             [item for item in videos if isinstance(item, dict)],
             key=lambda item: int(item.get("index") or 0),
         ):
-            video_url = item.get("videoUrl") or item.get("url")
+            video_url = item.get("videoUrl") or item.get("url") or item.get("localPath")
             if not video_url:
                 continue
             video_items.append({
@@ -1296,7 +1310,7 @@ def process_job(conn, job):
                 "originalName": item.get("originalName") or item.get("name") or "",
             })
     else:
-        video_url = request_payload.get("videoUrl")
+        video_url = request_payload.get("videoUrl") or request_payload.get("localPath")
         video_items = [{
             "videoUrl": video_url,
             "originalName": request_payload.get("originalName") or "",
