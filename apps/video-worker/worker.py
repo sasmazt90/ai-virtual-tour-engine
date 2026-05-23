@@ -67,7 +67,7 @@ COLMAP_USE_GPU = os.getenv("COLMAP_USE_GPU", "0")
 MIN_VIDEO_WIDTH = int(os.getenv("MIN_VIDEO_WIDTH", "1280"))
 MIN_VIDEO_HEIGHT = int(os.getenv("MIN_VIDEO_HEIGHT", "720"))
 MIN_VIDEO_DURATION_SECONDS = float(os.getenv("MIN_VIDEO_DURATION_SECONDS", "25"))
-MIN_VIDEO_BITRATE_MBPS = float(os.getenv("MIN_VIDEO_BITRATE_MBPS", "2.5"))
+MIN_VIDEO_BITRATE_MBPS = float(os.getenv("MIN_VIDEO_BITRATE_MBPS", "1.0"))
 REQUIRE_LANDSCAPE_VIDEO = os.getenv("REQUIRE_LANDSCAPE_VIDEO", "1").lower() in ("1", "true", "yes")
 
 
@@ -428,7 +428,7 @@ def probe_video(path):
     }
 
 
-def validate_video_capture(metadata, label):
+def validate_video_capture(metadata, label, compressed=False):
     failures = []
     effective_width = int(metadata.get("effectiveWidth") or 0)
     effective_height = int(metadata.get("effectiveHeight") or 0)
@@ -441,8 +441,9 @@ def validate_video_capture(metadata, label):
         failures.append(f"use at least {MIN_VIDEO_WIDTH}x{MIN_VIDEO_HEIGHT} video")
     if duration < MIN_VIDEO_DURATION_SECONDS:
         failures.append(f"record at least {int(MIN_VIDEO_DURATION_SECONDS)} seconds per clip")
-    if bitrate and bitrate < MIN_VIDEO_BITRATE_MBPS:
-        failures.append(f"export with at least {MIN_VIDEO_BITRATE_MBPS:g} Mbps quality")
+    min_bitrate = 0.6 if compressed else MIN_VIDEO_BITRATE_MBPS
+    if bitrate and bitrate < min_bitrate:
+        failures.append(f"export with at least {min_bitrate:g} Mbps quality")
 
     if failures:
         raise ReconstructionQualityError(
@@ -492,7 +493,7 @@ def extract_video_set(video_items, work_dir, images_dir):
             f"rotation {metadata['rotation']}",
             flush=True,
         )
-        validate_video_capture(metadata, label)
+        validate_video_capture(metadata, label, compressed=bool(item.get("compressed")))
         extracted += 1
         update_pattern = f"clip{extracted:03d}_frame_%06d.jpg"
         print(f"Extracting frames from clip {index}/{video_count}", flush=True)
