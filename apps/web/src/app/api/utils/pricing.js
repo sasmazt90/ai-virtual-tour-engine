@@ -9,13 +9,16 @@ export const AI_STAGING_FURNITURE_REFERENCE_CREDIT_COST = 15;
 // Charging is per-photo, so larger batches can be done by running multiple jobs.
 export const AI_STAGING_MAX_PHOTOS_PER_JOB = 12;
 
-export const AI_VIDEO_3D_MAX_BYTES = 800 * 1024 * 1024;
+export const AI_VIDEO_3D_MAX_MB = 999.9;
+export const AI_VIDEO_3D_MAX_BYTES = Math.floor(
+  AI_VIDEO_3D_MAX_MB * 1024 * 1024,
+);
 export const AI_VIDEO_3D_MAX_FILES = 20;
 
 export const AI_VIDEO_3D_CREDIT_TIERS = [
   { maxBytes: 250 * 1024 * 1024, credits: 300, label: "Up to 250 MB" },
   { maxBytes: 500 * 1024 * 1024, credits: 500, label: "250-500 MB" },
-  { maxBytes: AI_VIDEO_3D_MAX_BYTES, credits: 800, label: "500-800 MB" },
+  { maxBytes: AI_VIDEO_3D_MAX_BYTES, credits: 800, label: "500-999.9 MB" },
 ];
 
 export const CREDIT_ADMIN_EMAILS = [

@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import { auth } from "@/auth";
-import { AI_VIDEO_3D_MAX_BYTES } from "@/app/api/utils/pricing";
+import {
+  AI_VIDEO_3D_MAX_BYTES,
+  AI_VIDEO_3D_MAX_MB,
+} from "@/app/api/utils/pricing";
 
 const MAX_FILE_BYTES = AI_VIDEO_3D_MAX_BYTES;
 
@@ -72,7 +75,9 @@ export async function POST(request) {
     const contentLength = Number(request.headers.get("content-length") || 0);
     if (contentLength && contentLength > MAX_FILE_BYTES) {
       return Response.json(
-        { error: "File is too large. Please upload a file under 800 MB." },
+        {
+          error: `File is too large. Please upload a file under ${AI_VIDEO_3D_MAX_MB} MB.`,
+        },
         { status: 413 },
       );
     }

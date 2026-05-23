@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { getDbUserIdFromSession } from "@/app/api/utils/dbUser";
 import {
   AI_VIDEO_3D_MAX_BYTES,
+  AI_VIDEO_3D_MAX_MB,
   AI_VIDEO_3D_MAX_FILES,
   calculateVideo3DTourCreditCost,
   getVideo3DTourCreditTier,
@@ -173,7 +174,9 @@ export async function POST(request) {
 
     if (totalFileSizeBytes > AI_VIDEO_3D_MAX_BYTES) {
       return Response.json(
-        { error: "Videos are too large. Please upload 800 MB total or less." },
+        {
+          error: `Videos are too large. Please upload ${AI_VIDEO_3D_MAX_MB} MB total or less.`,
+        },
         { status: 413 },
       );
     }

@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { auth } from "@/auth";
-import { AI_VIDEO_3D_MAX_BYTES } from "@/app/api/utils/pricing";
+import {
+  AI_VIDEO_3D_MAX_BYTES,
+  AI_VIDEO_3D_MAX_MB,
+} from "@/app/api/utils/pricing";
 
 const MAX_FILE_BYTES = AI_VIDEO_3D_MAX_BYTES;
 
@@ -88,7 +91,9 @@ export async function POST(request) {
 
     if (sizeBytes > MAX_FILE_BYTES) {
       return Response.json(
-        { error: "File is too large. Please upload 800 MB or less." },
+        {
+          error: `File is too large. Please upload ${AI_VIDEO_3D_MAX_MB} MB or less.`,
+        },
         { status: 413 },
       );
     }
