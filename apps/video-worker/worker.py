@@ -1491,6 +1491,7 @@ def process_job(conn, job):
             video_items.append({
                 "videoUrl": video_url,
                 "originalName": item.get("originalName") or item.get("name") or "",
+                "compressed": bool(item.get("compressed")),
             })
     else:
         video_url = request_payload.get("videoUrl") or request_payload.get("localPath")
