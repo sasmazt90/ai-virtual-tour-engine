@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Clock3, Loader2, Video, XCircle } from "lucide-react";
+import { CheckCircle2, Clock3, Loader2, Trash2, Video, XCircle } from "lucide-react";
 import { ModalShell } from "./ModalShell";
 import {
   AI_VIDEO_3D_CREDIT_TIERS,
@@ -175,6 +175,7 @@ function userSafeJobError(rawError) {
 
 export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
   const queryClient = useQueryClient();
+  const fileInputRef = useRef(null);
   const [files, setFiles] = useState([]);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
@@ -259,6 +260,18 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
     setStatus("idle");
     setError("");
   }, []);
+
+  const removeFileAt = useCallback(
+    (removeIndex) => {
+      if (disableActions || jobId) return;
+      setFiles((current) => current.filter((_, index) => index !== removeIndex));
+      setError("");
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    },
+    [disableActions, jobId],
+  );
 
   const onStart = useCallback(async () => {
     if (!propertyId) {
@@ -464,11 +477,15 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
             iPhone videos
           </label>
           <input
+            ref={fileInputRef}
             type="file"
             accept="video/mp4,video/quicktime,.mp4,.mov,.m4v"
             multiple
             disabled={disableActions || !!jobId}
-            onChange={(e) => setFiles(fileListFromInput(e.target.files))}
+            onChange={(e) => {
+              setFiles(fileListFromInput(e.target.files));
+              setError("");
+            }}
             className="mt-2 block w-full text-sm text-gray-700 dark:text-gray-200 font-jetbrains-mono file:mr-3 file:rounded-md file:border-0 file:bg-amber-500 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-amber-600"
           />
           {files.length ? (
@@ -481,11 +498,27 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
                   ? ` - ${estimatedCreditCost.toLocaleString()} credits`
                   : ""}
               </div>
-              <ol className="list-decimal pl-5">
-                {files.map((item) => (
-                  <li key={`${item.name}-${item.size}-${item.lastModified}`}>
-                    {item.name} - {formatFileSize(item.size)} -{" "}
-                    {extensionFromName(item.name) || "unknown"}
+              <ol className="space-y-1">
+                {files.map((item, index) => (
+                  <li
+                    key={`${item.name}-${item.size}-${item.lastModified}`}
+                    className="grid grid-cols-[1.5rem_minmax(0,1fr)_auto] items-center gap-2"
+                  >
+                    <span className="text-right tabular-nums">{index + 1}.</span>
+                    <span className="min-w-0 truncate">
+                      {item.name} - {formatFileSize(item.size)} -{" "}
+                      {extensionFromName(item.name) || "unknown"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeFileAt(index)}
+                      disabled={disableActions || !!jobId}
+                      title="Remove video"
+                      aria-label={`Remove ${item.name}`}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-red-500/10 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-400 dark:hover:text-red-300"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </li>
                 ))}
               </ol>
@@ -501,31 +534,49 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
             <div className="mt-3 space-y-2">
               {videoChecks.map((item) => {
                 const ready = !item.warnings?.length;
+                const fileIndex = files.findIndex(
+                  (file) =>
+                    file.name === item.file.name &&
+                    file.size === item.file.size &&
+                    file.lastModified === item.file.lastModified,
+                );
                 return (
                   <div
                     key={`${item.file.name}-${item.file.size}-${item.file.lastModified}-check`}
-                    className={`rounded-md border px-3 py-2 text-xs font-jetbrains-mono ${
+                    className={`grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 rounded-md border px-3 py-2 text-xs font-jetbrains-mono ${
                       ready
                         ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
                         : "border-red-500/30 bg-red-500/5 text-red-700 dark:text-red-300"
                     }`}
                   >
-                    <div className="font-semibold">
-                      {ready ? "Ready" : "Needs a better recording"}:{" "}
-                      {item.file.name}
+                    <div className="min-w-0">
+                      <div className="truncate font-semibold">
+                        {ready ? "Ready" : "Needs a better recording"}:{" "}
+                        {item.file.name}
+                      </div>
+                      <div className="mt-1 text-gray-500 dark:text-gray-400">
+                        {item.width && item.height
+                          ? `${item.width}x${item.height}`
+                          : "unknown size"}
+                        {" - "}
+                        {formatVideoDuration(item.duration)}
+                        {" - "}
+                        {formatBitrate(item.bitrateMbps)}
+                      </div>
+                      {!ready ? (
+                        <div className="mt-1">{item.warnings.join(", ")}.</div>
+                      ) : null}
                     </div>
-                    <div className="mt-1 text-gray-500 dark:text-gray-400">
-                      {item.width && item.height
-                        ? `${item.width}x${item.height}`
-                        : "unknown size"}
-                      {" - "}
-                      {formatVideoDuration(item.duration)}
-                      {" - "}
-                      {formatBitrate(item.bitrateMbps)}
-                    </div>
-                    {!ready ? (
-                      <div className="mt-1">{item.warnings.join(", ")}.</div>
-                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => removeFileAt(fileIndex)}
+                      disabled={fileIndex < 0 || disableActions || !!jobId}
+                      title="Remove video"
+                      aria-label={`Remove ${item.file.name}`}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-current hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-white/10"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </div>
                 );
               })}
