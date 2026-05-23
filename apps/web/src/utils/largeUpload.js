@@ -1,3 +1,16 @@
+const TUS_CHUNK_SIZE = 6 * 1024 * 1024;
+
+function resumableEndpointFor(supabaseUrl) {
+  const parsed = new URL(supabaseUrl);
+  const projectId = parsed.hostname.split(".")[0];
+
+  if (projectId && parsed.hostname.endsWith(".supabase.co")) {
+    return `https://${projectId}.storage.supabase.co/storage/v1/upload/resumable`;
+  }
+
+  return `${String(supabaseUrl || "").replace(/\/+$/, "")}/storage/v1/upload/resumable`;
+}
+
 async function uploadViaServer(file, { fallbackName, reportProgress }) {
   reportProgress(8);
 
@@ -23,6 +36,55 @@ async function uploadViaServer(file, { fallbackName, reportProgress }) {
     url: body.url,
     mimeType: body.mimeType || file.type || "application/octet-stream",
     sizeBytes: body.sizeBytes || file.size || null,
+  };
+}
+
+async function uploadViaTus(file, signBody, reportProgress) {
+  const tus = await import("tus-js-client");
+
+  reportProgress(5);
+
+  await new Promise((resolve, reject) => {
+    const upload = new tus.Upload(file, {
+      endpoint: resumableEndpointFor(signBody.supabaseUrl),
+      retryDelays: [0, 3000, 5000, 10000, 20000],
+      headers: {
+        "x-signature": signBody.token,
+        "x-upsert": "false",
+      },
+      metadata: {
+        bucketName: signBody.bucket,
+        objectName: signBody.path,
+        contentType: file.type || signBody.mimeType || "application/octet-stream",
+        cacheControl: "3600",
+      },
+      chunkSize: TUS_CHUNK_SIZE,
+      uploadDataDuringCreation: true,
+      removeFingerprintOnSuccess: true,
+      onError: reject,
+      onProgress: (bytesUploaded, bytesTotal) => {
+        const total = Number(bytesTotal || file.size || 0);
+        const uploaded = Number(bytesUploaded || 0);
+        const percent = total > 0 ? (uploaded / total) * 95 + 5 : 5;
+        reportProgress(percent);
+      },
+      onSuccess: resolve,
+    });
+
+    upload.findPreviousUploads().then((previousUploads) => {
+      if (previousUploads.length) {
+        upload.resumeFromPreviousUpload(previousUploads[0]);
+      }
+      upload.start();
+    }).catch(reject);
+  });
+
+  reportProgress(100);
+
+  return {
+    url: signBody.publicUrl,
+    mimeType: file.type || signBody.mimeType || "application/octet-stream",
+    sizeBytes: file.size || signBody.sizeBytes || null,
   };
 }
 
@@ -56,6 +118,18 @@ export async function uploadLargeFile(file, { fallbackName = "upload", onProgres
   }
 
   reportProgress(5);
+
+  try {
+    return await uploadViaTus(file, signBody, reportProgress);
+  } catch (tusError) {
+    if (file.size > TUS_CHUNK_SIZE) {
+      throw new Error(
+        tusError instanceof Error
+          ? `Large file upload failed: ${tusError.message}`
+          : "Large file upload failed.",
+      );
+    }
+  }
 
   const { createClient } = await import("@supabase/supabase-js");
   const supabase = createClient(signBody.supabaseUrl, signBody.anonKey, {
