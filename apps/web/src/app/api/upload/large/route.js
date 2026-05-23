@@ -73,7 +73,11 @@ export async function POST(request) {
     }
 
     const contentLength = Number(request.headers.get("content-length") || 0);
-    if (contentLength && contentLength > MAX_FILE_BYTES) {
+    if (
+      contentLength &&
+      Number.isFinite(MAX_FILE_BYTES) &&
+      contentLength > MAX_FILE_BYTES
+    ) {
       return Response.json(
         {
           error: `File is too large. Please upload a file under ${AI_VIDEO_3D_MAX_MB} MB.`,
@@ -142,8 +146,12 @@ export async function POST(request) {
     });
   } catch (error) {
     console.error("POST /api/upload/large error:", error);
+    const message =
+      error instanceof Error && error.message
+        ? error.message
+        : "Failed to upload large file.";
     return Response.json(
-      { error: "Failed to upload large file." },
+      { error: message },
       { status: 500 },
     );
   }

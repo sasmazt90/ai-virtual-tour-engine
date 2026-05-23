@@ -7,6 +7,7 @@ import { uploadLargeFile } from "@/utils/largeUpload";
 
 const SUPPORTED_EXTENSIONS = new Set(["ply", "splat", "ksplat"]);
 const MAX_SCAN_BYTES = AI_VIDEO_3D_MAX_BYTES;
+const HAS_SCAN_SIZE_LIMIT = Number.isFinite(MAX_SCAN_BYTES);
 
 function extensionFromName(name) {
   return String(name || "").split(".").pop()?.toLowerCase().trim() || "";
@@ -61,7 +62,7 @@ export function CreateSplatTourModal({ open, onClose, propertyId, userId }) {
       return;
     }
 
-    if (file.size > MAX_SCAN_BYTES) {
+    if (HAS_SCAN_SIZE_LIMIT && file.size > MAX_SCAN_BYTES) {
       setError(
         `3D tour file is too large (${formatFileSize(file.size)}). Please upload a file under ${formatFileSize(
           MAX_SCAN_BYTES,
@@ -158,7 +159,10 @@ export function CreateSplatTourModal({ open, onClose, propertyId, userId }) {
           {file ? (
             <div className="mt-2 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
               {file.name} - {formatFileSize(file.size)} -{" "}
-              {format || "unknown"} - Limit {formatFileSize(MAX_SCAN_BYTES)}
+              {format || "unknown"}
+              {HAS_SCAN_SIZE_LIMIT
+                ? ` - Limit ${formatFileSize(MAX_SCAN_BYTES)}`
+                : " - No file size limit"}
             </div>
           ) : null}
         </div>

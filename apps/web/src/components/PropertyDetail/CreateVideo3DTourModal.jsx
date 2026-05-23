@@ -13,6 +13,7 @@ import { uploadLargeFile } from "@/utils/largeUpload";
 const SUPPORTED_EXTENSIONS = new Set(["mp4", "mov", "m4v"]);
 const DEFAULT_TOTAL_MS = 90 * 60 * 1000;
 const MAX_VIDEO_BYTES = AI_VIDEO_3D_MAX_BYTES;
+const HAS_VIDEO_SIZE_LIMIT = Number.isFinite(MAX_VIDEO_BYTES);
 const MIN_VIDEO_WIDTH = 1280;
 const MIN_VIDEO_HEIGHT = 720;
 const MIN_VIDEO_DURATION_SECONDS = 25;
@@ -301,7 +302,7 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
       return;
     }
 
-    if (totalFileSize > MAX_VIDEO_BYTES) {
+    if (HAS_VIDEO_SIZE_LIMIT && totalFileSize > MAX_VIDEO_BYTES) {
       setStatus("error");
       setError(
         `Videos are too large (${formatFileSize(totalFileSize)} total). Please upload ${formatFileSize(MAX_VIDEO_BYTES)} total or less.`,
@@ -492,8 +493,10 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
             <div className="mt-2 space-y-1 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
               <div>
                 {files.length} video{files.length === 1 ? "" : "s"} -{" "}
-                {formatFileSize(totalFileSize)} total - Limit{" "}
-                {formatFileSize(MAX_VIDEO_BYTES)}
+                {formatFileSize(totalFileSize)} total
+                {HAS_VIDEO_SIZE_LIMIT
+                  ? ` - Limit ${formatFileSize(MAX_VIDEO_BYTES)}`
+                  : " - No file size limit"}
                 {estimatedCreditCost
                   ? ` - ${estimatedCreditCost.toLocaleString()} credits`
                   : ""}

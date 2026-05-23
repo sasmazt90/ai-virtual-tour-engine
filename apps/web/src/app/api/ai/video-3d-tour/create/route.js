@@ -172,7 +172,10 @@ export async function POST(request) {
       0,
     );
 
-    if (totalFileSizeBytes > AI_VIDEO_3D_MAX_BYTES) {
+    if (
+      Number.isFinite(AI_VIDEO_3D_MAX_BYTES) &&
+      totalFileSizeBytes > AI_VIDEO_3D_MAX_BYTES
+    ) {
       return Response.json(
         {
           error: `Videos are too large. Please upload ${AI_VIDEO_3D_MAX_MB} MB total or less.`,

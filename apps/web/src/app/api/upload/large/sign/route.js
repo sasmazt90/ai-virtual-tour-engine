@@ -89,7 +89,7 @@ export async function POST(request) {
       return Response.json({ error: "Missing file size." }, { status: 400 });
     }
 
-    if (sizeBytes > MAX_FILE_BYTES) {
+    if (Number.isFinite(MAX_FILE_BYTES) && sizeBytes > MAX_FILE_BYTES) {
       return Response.json(
         {
           error: `File is too large. Please upload ${AI_VIDEO_3D_MAX_MB} MB or less.`,
