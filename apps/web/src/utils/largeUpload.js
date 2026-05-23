@@ -1,3 +1,31 @@
+async function uploadViaServer(file, { fallbackName, reportProgress }) {
+  reportProgress(8);
+
+  const response = await fetch("/api/upload/large", {
+    method: "POST",
+    headers: {
+      "Content-Type": file.type || "application/octet-stream",
+      "x-filename": encodeURIComponent(file.name || fallbackName || "upload"),
+    },
+    body: file,
+  });
+
+  reportProgress(95);
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body?.error || "Failed to upload large file.");
+  }
+
+  reportProgress(100);
+
+  return {
+    url: body.url,
+    mimeType: body.mimeType || file.type || "application/octet-stream",
+    sizeBytes: body.sizeBytes || file.size || null,
+  };
+}
+
 export async function uploadLargeFile(file, { fallbackName = "upload", onProgress } = {}) {
   if (!file) throw new Error("Choose a file first.");
 
@@ -21,6 +49,9 @@ export async function uploadLargeFile(file, { fallbackName = "upload", onProgres
 
   const signBody = await signResponse.json().catch(() => ({}));
   if (!signResponse.ok) {
+    if (signResponse.status >= 500) {
+      return uploadViaServer(file, { fallbackName, reportProgress });
+    }
     throw new Error(signBody?.error || "Could not prepare upload.");
   }
 
@@ -42,7 +73,7 @@ export async function uploadLargeFile(file, { fallbackName = "upload", onProgres
     });
 
   if (error) {
-    throw new Error(error.message || "Upload failed.");
+    return uploadViaServer(file, { fallbackName, reportProgress });
   }
 
   reportProgress(100);
