@@ -392,7 +392,7 @@ def probe_video(path):
         ])
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         raise ReconstructionQualityError(
-            "The video could not be inspected. Please upload a standard iPhone .mp4 or .mov file."
+            "The video could not be inspected. Please upload a standard iPhone .mp4, .mov or compressed .webm file."
         ) from exc
 
     try:
@@ -1361,6 +1361,58 @@ def upload_result(path):
     )
 
 
+def storage_object_path_from_public_url(url):
+    try:
+        parsed = urllib.parse.urlparse(str(url or ""))
+        marker = f"/storage/v1/object/public/{urllib.parse.quote(SUPABASE_STORAGE_BUCKET, safe='')}/"
+        if marker not in parsed.path:
+            return None
+        encoded_path = parsed.path.split(marker, 1)[1]
+        return urllib.parse.unquote(encoded_path)
+    except Exception:
+        return None
+
+
+def delete_storage_object(object_path):
+    if not object_path:
+        return False
+    delete_url = (
+        f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/"
+        f"{requests.utils.quote(SUPABASE_STORAGE_BUCKET, safe='')}/"
+        f"{'/'.join(requests.utils.quote(part, safe='') for part in object_path.split('/'))}"
+    )
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+    }
+    response = requests.delete(delete_url, headers=headers, timeout=60)
+    if not response.ok and response.status_code != 404:
+        print(
+            f"Source video cleanup failed: {response.status_code} {response.reason} {object_path}",
+            flush=True,
+        )
+        return False
+    return True
+
+
+def cleanup_source_videos(job):
+    request_payload = job.get("request_payload") or {}
+    videos = request_payload.get("videos")
+    items = videos if isinstance(videos, list) and videos else [request_payload]
+    removed = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        object_path = item.get("objectPath") or storage_object_path_from_public_url(
+            item.get("videoUrl") or item.get("url")
+        )
+        if delete_storage_object(object_path):
+            removed += 1
+    if removed:
+        print(f"Cleaned up {removed} uploaded source video(s).", flush=True)
+    return removed
+
+
 def save_virtual_tour(conn, job, scenes, skipped_scenes=None):
     request_payload = job.get("request_payload") or {}
     primary_scene = next((scene for scene in scenes if scene.get("fileUrl")), scenes[0])
@@ -1558,6 +1610,10 @@ def process_job(conn, job):
                 "skippedScenes": skipped_scenes,
             },
         )
+        try:
+            cleanup_source_videos(job)
+        except Exception as cleanup_exc:
+            print(f"Source video cleanup error: {cleanup_exc}", flush=True)
 
 
 def main():

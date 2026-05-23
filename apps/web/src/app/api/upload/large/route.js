@@ -12,6 +12,7 @@ const VIDEO_EXTENSIONS = {
   "video/quicktime": "mov",
   "video/x-m4v": "m4v",
   "video/m4v": "m4v",
+  "video/webm": "webm",
 };
 
 const MODEL_EXTENSIONS = {
@@ -19,8 +20,8 @@ const MODEL_EXTENSIONS = {
   "application/octet-stream": "",
 };
 
-const SAFE_EXTENSIONS = new Set(["mp4", "mov", "m4v", "ply", "splat", "ksplat"]);
-const VIDEO_SAFE_EXTENSIONS = new Set(["mp4", "mov", "m4v"]);
+const SAFE_EXTENSIONS = new Set(["mp4", "mov", "m4v", "webm", "ply", "splat", "ksplat"]);
+const VIDEO_SAFE_EXTENSIONS = new Set(["mp4", "mov", "m4v", "webm"]);
 const MODEL_SAFE_EXTENSIONS = new Set(["ply", "splat", "ksplat"]);
 
 function getSupabaseStorageConfig() {
@@ -99,7 +100,7 @@ export async function POST(request) {
       return Response.json(
         {
           error:
-            "Supported large upload formats are .mp4, .mov, .m4v, .ply, .splat and .ksplat.",
+            "Supported large upload formats are .mp4, .mov, .m4v, .webm, .ply, .splat and .ksplat.",
         },
         { status: 400 },
       );

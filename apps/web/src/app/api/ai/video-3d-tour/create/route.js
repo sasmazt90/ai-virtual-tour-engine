@@ -9,7 +9,7 @@ import {
   getVideo3DTourCreditTier,
 } from "@/app/api/utils/pricing";
 
-const SUPPORTED_VIDEO_EXTENSIONS = new Set(["mp4", "mov", "m4v"]);
+const SUPPORTED_VIDEO_EXTENSIONS = new Set(["mp4", "mov", "m4v", "webm"]);
 
 function getExtension(value) {
   try {
@@ -143,7 +143,7 @@ export async function POST(request) {
       const ext = getExtension(input.originalName) || getExtension(input.videoUrl);
       if (!SUPPORTED_VIDEO_EXTENSIONS.has(ext)) {
         return Response.json(
-          { error: "Supported video formats are .mp4, .mov and .m4v." },
+          { error: "Supported video formats are .mp4, .mov, .m4v and .webm." },
           { status: 400 },
         );
       }
