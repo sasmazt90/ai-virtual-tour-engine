@@ -24,16 +24,14 @@ const MODEL_SAFE_EXTENSIONS = new Set(["ply", "splat", "ksplat"]);
 function getSupabaseStorageConfig() {
   const url = process.env.SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const anonKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
   const bucket = process.env.SUPABASE_STORAGE_BUCKET || "uploads";
 
-  if (!url || !serviceRoleKey || !anonKey) return null;
+  if (!url || !serviceRoleKey) return null;
 
   return {
     url: url.replace(/\/+$/, ""),
     bucket,
     serviceRoleKey,
-    anonKey,
   };
 }
 
@@ -131,7 +129,6 @@ export async function POST(request) {
       token: data.token,
       signedUrl: data.signedUrl || data.signedURL || null,
       supabaseUrl: config.url,
-      anonKey: config.anonKey,
       publicUrl: publicUrlFor({
         url: config.url,
         bucket: config.bucket,

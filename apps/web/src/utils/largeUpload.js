@@ -111,7 +111,7 @@ export async function uploadLargeFile(file, { fallbackName = "upload", onProgres
 
   const signBody = await signResponse.json().catch(() => ({}));
   if (!signResponse.ok) {
-    if (signResponse.status >= 500) {
+    if (signResponse.status >= 500 && file.size <= TUS_CHUNK_SIZE) {
       return uploadViaServer(file, { fallbackName, reportProgress });
     }
     throw new Error(signBody?.error || "Could not prepare upload.");
@@ -132,6 +132,10 @@ export async function uploadLargeFile(file, { fallbackName = "upload", onProgres
   }
 
   const { createClient } = await import("@supabase/supabase-js");
+  if (!signBody.anonKey) {
+    return uploadViaServer(file, { fallbackName, reportProgress });
+  }
+
   const supabase = createClient(signBody.supabaseUrl, signBody.anonKey, {
     auth: {
       autoRefreshToken: false,
