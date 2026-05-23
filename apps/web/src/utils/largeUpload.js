@@ -111,7 +111,7 @@ export async function uploadLargeFile(file, { fallbackName = "upload", onProgres
 
   const signBody = await signResponse.json().catch(() => ({}));
   if (!signResponse.ok) {
-    if (signResponse.status >= 500 && file.size <= TUS_CHUNK_SIZE) {
+    if (signResponse.status >= 500) {
       return uploadViaServer(file, { fallbackName, reportProgress });
     }
     throw new Error(signBody?.error || "Could not prepare upload.");

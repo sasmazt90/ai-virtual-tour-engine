@@ -125,7 +125,15 @@ export async function POST(request) {
       .createSignedUploadUrl(objectPath);
 
     if (error || !data?.token) {
-      throw new Error(error?.message || "Could not create signed upload URL.");
+      console.error("Supabase signed upload URL failed:", error);
+      return Response.json(
+        {
+          error:
+            error?.message ||
+            "Could not prepare upload. The upload will retry through the server.",
+        },
+        { status: 502 },
+      );
     }
 
     return Response.json({
