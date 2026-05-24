@@ -44,9 +44,39 @@ function hasAnyNearbyData(nearbyObj) {
   const n = nearbyObj && typeof nearbyObj === "object" ? nearbyObj : null;
   if (!n) return false;
 
+  if (hasDetailedNearbyData(n)) return true;
+
   const groups = [n.health, n.shopping, n.education, n.transport];
   for (const g of groups) {
     if (Array.isArray(g) && g.length > 0) return true;
+  }
+
+  return false;
+}
+
+function hasDetailedNearbyData(nearbyObj) {
+  const n = nearbyObj && typeof nearbyObj === "object" ? nearbyObj : null;
+  if (!n) return false;
+
+  const surroundings =
+    n.surroundings && typeof n.surroundings === "object"
+      ? n.surroundings
+      : null;
+  if (surroundings) {
+    const detailedGroups = [
+      surroundings.transportation,
+      surroundings.healthcare,
+      surroundings.education,
+      surroundings.shopping,
+    ];
+    for (const g of detailedGroups) {
+      if (
+        Array.isArray(g) &&
+        g.some((item) => item && (item.place || item.name || item.distance_m))
+      ) {
+        return true;
+      }
+    }
   }
 
   return false;
@@ -100,12 +130,13 @@ export async function GET(request, { params }) {
       const hasAddress = addressParts.length > 0;
       const nearbyParsed = parseJsonbMaybe(property.nearby_places);
       const alreadyHasNearby = hasAnyNearbyData(nearbyParsed);
+      const alreadyHasDetailedNearby = hasDetailedNearbyData(nearbyParsed);
 
       const lat = Number(property.geo_lat);
       const lng = Number(property.geo_lng);
       const hasGeo = Number.isFinite(lat) && Number.isFinite(lng);
 
-      if (hasAddress && !alreadyHasNearby) {
+      if (hasAddress && (!alreadyHasNearby || !alreadyHasDetailedNearby)) {
         let nextLat = hasGeo ? lat : null;
         let nextLng = hasGeo ? lng : null;
         let nextFormatted = property.address_formatted || null;

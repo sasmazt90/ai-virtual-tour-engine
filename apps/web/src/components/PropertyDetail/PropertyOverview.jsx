@@ -68,6 +68,121 @@ function NearbyList({ places, emptyText }) {
   );
 }
 
+const SURROUNDING_GROUPS = [
+  { key: "transportation", title: "Transportation" },
+  { key: "healthcare", title: "Healthcare" },
+  { key: "education", title: "Education" },
+  { key: "shopping", title: "Shopping" },
+];
+
+function normalizeSurroundingItem(raw) {
+  if (!raw || typeof raw !== "object") return null;
+
+  const place = raw.place && typeof raw.place === "object" ? raw.place : raw;
+  const label = raw.label ? String(raw.label) : "";
+  const name = place?.name ? String(place.name) : "";
+  const distance = raw.distance_m ?? place?.distance_m ?? null;
+
+  if (!label && !name && distance === null) return null;
+
+  return {
+    label: label || name || "Nearby place",
+    name,
+    distance_m: distance,
+    place_id: raw.place_id || place?.place_id || `${label}-${name}`,
+  };
+}
+
+function buildSurroundingGroups(nearby) {
+  const detailed =
+    nearby?.surroundings && typeof nearby.surroundings === "object"
+      ? nearby.surroundings
+      : null;
+
+  if (detailed) {
+    return SURROUNDING_GROUPS.map((group) => ({
+      ...group,
+      items: (Array.isArray(detailed[group.key]) ? detailed[group.key] : [])
+        .map(normalizeSurroundingItem)
+        .filter(Boolean),
+    }));
+  }
+
+  return [
+    {
+      key: "transportation",
+      title: "Transportation",
+      items: (Array.isArray(nearby?.transport) ? nearby.transport : [])
+        .map((place) =>
+          normalizeSurroundingItem({ label: "Nearby transport", place }),
+        )
+        .filter(Boolean),
+    },
+    {
+      key: "healthcare",
+      title: "Healthcare",
+      items: (Array.isArray(nearby?.health) ? nearby.health : [])
+        .map((place) => normalizeSurroundingItem({ label: "Healthcare", place }))
+        .filter(Boolean),
+    },
+    {
+      key: "education",
+      title: "Education",
+      items: (Array.isArray(nearby?.education) ? nearby.education : [])
+        .map((place) => normalizeSurroundingItem({ label: "Education", place }))
+        .filter(Boolean),
+    },
+    {
+      key: "shopping",
+      title: "Shopping",
+      items: (Array.isArray(nearby?.shopping) ? nearby.shopping : [])
+        .map((place) => normalizeSurroundingItem({ label: "Shopping", place }))
+        .filter(Boolean),
+    },
+  ];
+}
+
+function SurroundingList({ items }) {
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) {
+    return (
+      <div className="mt-2 text-sm text-gray-500 dark:text-gray-400 font-jetbrains-mono">
+        No nearby places found.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-2">
+      {list.slice(0, 10).map((p, idx) => {
+        const dist = formatDistance(p?.distance_m);
+        const key = p?.place_id || `${p?.label}-${idx}`;
+
+        return (
+          <div
+            key={key}
+            className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 text-sm text-gray-800 dark:text-gray-200 font-jetbrains-mono"
+          >
+            <div className="min-w-0">
+              <div className="font-medium text-gray-900 dark:text-gray-100">
+                {p?.label || "Nearby place"}
+              </div>
+              {p?.name ? (
+                <div className="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+                  {p.name}
+                </div>
+              ) : null}
+            </div>
+            <div className="shrink-0 text-gray-500 dark:text-gray-400">
+              {dist || ""}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Field({ label, value }) {
   return (
     <div className="text-gray-600 dark:text-gray-300 font-jetbrains-mono">
@@ -122,22 +237,10 @@ export function PropertyOverview({ property }) {
     : [];
 
   const nearby = parseNearbyPlaces(property?.nearby_places);
-
-  // NOTE: UI spec request: show Hospitals / Shopping / Education / Transportation (English)
-  const hospitalPlaces = Array.isArray(nearby?.health) ? nearby.health : [];
-  const educationPlaces = Array.isArray(nearby?.education)
-    ? nearby.education
-    : [];
-  const shoppingPlaces = Array.isArray(nearby?.shopping) ? nearby.shopping : [];
-  const transportPlaces = Array.isArray(nearby?.transport)
-    ? nearby.transport
-    : [];
-
-  const hasNearbyData =
-    hospitalPlaces.length > 0 ||
-    educationPlaces.length > 0 ||
-    shoppingPlaces.length > 0 ||
-    transportPlaces.length > 0;
+  const surroundingGroups = buildSurroundingGroups(nearby);
+  const hasNearbyData = surroundingGroups.some(
+    (group) => group.items.length > 0,
+  );
 
   return (
     <div className="space-y-8">
@@ -265,7 +368,7 @@ export function PropertyOverview({ property }) {
       <div className="bg-white dark:bg-[#262626] rounded-xl shadow-lg dark:shadow-none dark:ring-1 dark:ring-gray-700 p-6">
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 font-jetbrains-mono">
-            Nearby places
+            Surroundings
           </h2>
           {nearby?.computed_at ? (
             <div className="text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
@@ -276,49 +379,20 @@ export function PropertyOverview({ property }) {
 
         {!hasNearbyData ? (
           <div className="mt-3 text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
-            Nearby places are not available yet. They are computed after a valid
+            Surroundings are not available yet. They are computed after a valid
             address is saved.
           </div>
         ) : null}
 
-        {/* UX change: categories stacked vertically (not side-by-side) */}
         <div className="mt-5 space-y-6">
-          <div>
-            <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-jetbrains-mono">
-              Hospitals
+          {surroundingGroups.map((group) => (
+            <div key={group.key}>
+              <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-jetbrains-mono">
+                {group.title}
+              </div>
+              <SurroundingList items={group.items} />
             </div>
-            <NearbyList
-              places={hospitalPlaces}
-              emptyText="No hospitals found."
-            />
-          </div>
-
-          <div>
-            <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-jetbrains-mono">
-              Shopping
-            </div>
-            <NearbyList places={shoppingPlaces} emptyText="No places found." />
-          </div>
-
-          <div>
-            <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-jetbrains-mono">
-              Education
-            </div>
-            <NearbyList
-              places={educationPlaces}
-              emptyText="No schools/universities found."
-            />
-          </div>
-
-          <div>
-            <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-jetbrains-mono">
-              Transportation
-            </div>
-            <NearbyList
-              places={transportPlaces}
-              emptyText="No stations found."
-            />
-          </div>
+          ))}
         </div>
       </div>
     </div>

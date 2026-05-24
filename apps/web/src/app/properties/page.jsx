@@ -20,6 +20,70 @@ function getCoverPhoto(property) {
   return sorted[0] || null;
 }
 
+function formatDistance(meters) {
+  const m = Number(meters);
+  if (!Number.isFinite(m)) return "";
+  if (m >= 1000) return `${Math.round((m / 1000) * 10) / 10} km`;
+  return `${Math.round(m)} m`;
+}
+
+function parseNearbyPlaces(rawNearby) {
+  if (!rawNearby) return null;
+  if (typeof rawNearby === "object") return rawNearby;
+  if (typeof rawNearby === "string") {
+    try {
+      const parsed = JSON.parse(rawNearby);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function getSurroundingPreview(property) {
+  const nearby = parseNearbyPlaces(property?.nearby_places);
+  const surroundings =
+    nearby?.surroundings && typeof nearby.surroundings === "object"
+      ? nearby.surroundings
+      : null;
+
+  const detailed = surroundings
+    ? [
+        ...(Array.isArray(surroundings.transportation)
+          ? surroundings.transportation
+          : []),
+        ...(Array.isArray(surroundings.healthcare)
+          ? surroundings.healthcare
+          : []),
+        ...(Array.isArray(surroundings.education) ? surroundings.education : []),
+        ...(Array.isArray(surroundings.shopping) ? surroundings.shopping : []),
+      ]
+    : [];
+
+  if (detailed.length > 0) {
+    return detailed
+      .filter((item) => item && (item.place || item.name || item.distance_m))
+      .slice(0, 3)
+      .map((item) => ({
+        label: item.label || item?.place?.name || "Nearby place",
+        distance: formatDistance(item.distance_m ?? item?.place?.distance_m),
+      }));
+  }
+
+  const legacy = [
+    ...(Array.isArray(nearby?.transport) ? nearby.transport : []),
+    ...(Array.isArray(nearby?.health) ? nearby.health : []),
+    ...(Array.isArray(nearby?.education) ? nearby.education : []),
+    ...(Array.isArray(nearby?.shopping) ? nearby.shopping : []),
+  ];
+
+  return legacy.slice(0, 3).map((place) => ({
+    label: place?.name || "Nearby place",
+    distance: formatDistance(place?.distance_m),
+  }));
+}
+
 function PropertyCard({ property, userId, onInvalidate }) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef(null);
@@ -28,6 +92,7 @@ function PropertyCard({ property, userId, onInvalidate }) {
   const [upload, { loading: uploading }] = useUpload();
 
   const cover = getCoverPhoto(property);
+  const surroundingsPreview = getSurroundingPreview(property);
 
   const addPhotosMutation = useMutation({
     mutationFn: async (files) => {
@@ -233,6 +298,25 @@ function PropertyCard({ property, userId, onInvalidate }) {
               {property.rooms} rooms • {property.size_sqm} m²
             </p>
           )}
+
+          {surroundingsPreview.length > 0 ? (
+            <div className="pt-2">
+              <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-jetbrains-mono">
+                Surroundings
+              </div>
+              <div className="mt-1 space-y-1">
+                {surroundingsPreview.map((item) => (
+                  <div
+                    key={`${item.label}-${item.distance}`}
+                    className="flex items-center justify-between gap-3 text-xs text-gray-600 dark:text-gray-400 font-jetbrains-mono"
+                  >
+                    <span className="min-w-0 truncate">{item.label}</span>
+                    <span className="shrink-0">{item.distance}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="pt-2 flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 font-jetbrains-mono">
             <ImageIcon size={14} className="text-[var(--brand)]" />
