@@ -89,6 +89,8 @@ export function ThemeProvider({ children, brandStyleVars }) {
           "--card-bg": "var(--card-bg-light)",
           "--border-color": "var(--border-light)",
           // UI helpers for inputs/hover states
+          "--field-bg": "#FFFFFF",
+          "--popover-bg": "#FFFFFF",
           "--surface-muted": "rgba(0,0,0,0.06)",
           "--surface-hover": "rgba(0,0,0,0.05)",
         }
@@ -98,6 +100,8 @@ export function ThemeProvider({ children, brandStyleVars }) {
           "--card-bg": "var(--card-bg-dark)",
           "--border-color": "var(--border-dark)",
           // UI helpers for inputs/hover states
+          "--field-bg": "#1f2937",
+          "--popover-bg": "#111827",
           "--surface-muted": "rgba(255,255,255,0.08)",
           "--surface-hover": "rgba(255,255,255,0.10)",
         };
@@ -181,29 +185,48 @@ export function ThemeProvider({ children, brandStyleVars }) {
       return `
         .dark select,
         .theme-dark select {
+          background-color: var(--field-bg) !important;
+          color: var(--text-primary) !important;
           color-scheme: dark;
         }
         .dark select option,
         .theme-dark select option {
-          background-color: #1f2937 !important;
+          background: #111827 !important;
+          background-color: #111827 !important;
           color: #f3f4f6 !important;
+        }
+        .dark select option:checked,
+        .theme-dark select option:checked {
+          background: #93c5fd !important;
+          background-color: #93c5fd !important;
+          color: #111827 !important;
         }
         .dark select optgroup,
         .theme-dark select optgroup {
-          background-color: #1f2937 !important;
+          background: #111827 !important;
+          background-color: #111827 !important;
           color: #f3f4f6 !important;
         }
       `;
     }
     return `
       .theme-light select {
+        background-color: var(--field-bg) !important;
+        color: var(--text-primary) !important;
         color-scheme: light;
       }
       .theme-light select option {
+        background: #ffffff !important;
         background-color: #ffffff !important;
         color: #111827 !important;
       }
+      .theme-light select option:checked {
+        background: #bfdbfe !important;
+        background-color: #bfdbfe !important;
+        color: #111827 !important;
+      }
       .theme-light select optgroup {
+        background: #ffffff !important;
         background-color: #ffffff !important;
         color: #111827 !important;
       }

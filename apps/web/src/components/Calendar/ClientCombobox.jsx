@@ -40,7 +40,7 @@ export function ClientCombobox({ value, onChange, clients, placeholder }) {
   const placeholderClass = "text-[var(--text-secondary)]";
 
   const dropdownClass =
-    "absolute z-20 mt-2 w-full rounded-xl border border-[var(--border-color)] bg-[var(--card-bg)] shadow-xl overflow-hidden";
+    "absolute z-20 mt-2 w-full rounded-xl border border-[var(--border-color)] bg-[var(--popover-bg)] shadow-xl overflow-hidden";
 
   const inputClass =
     "w-full rounded-lg border border-[var(--border-color)] bg-[var(--surface-muted)] px-3 py-2 text-sm font-jetbrains-mono text-[var(--text-primary)] placeholder-[var(--text-secondary)] outline-none focus:ring-2 focus:ring-[var(--brand)]";
