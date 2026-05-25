@@ -14,8 +14,6 @@ const SUPPORTED_EXTENSIONS = new Set(["mp4", "mov", "m4v", "webm"]);
 const DEFAULT_TOTAL_MS = 90 * 60 * 1000;
 const MAX_VIDEO_BYTES = AI_VIDEO_3D_MAX_BYTES;
 const HAS_VIDEO_SIZE_LIMIT = Number.isFinite(MAX_VIDEO_BYTES);
-const SUPABASE_FREE_OBJECT_TARGET_BYTES = 48 * 1024 * 1024;
-const COMPRESSED_VIDEO_MIME = "video/webm;codecs=vp9";
 const MIN_VIDEO_WIDTH = 1280;
 const MIN_VIDEO_HEIGHT = 720;
 const MIN_VIDEO_DURATION_SECONDS = 25;
@@ -110,169 +108,6 @@ function inspectVideoFile(file) {
 
     video.src = url;
   });
-}
-
-function loadVideoElement(file) {
-  return new Promise((resolve, reject) => {
-    if (typeof document === "undefined") {
-      reject(new Error("Video compression is only available in the browser."));
-      return;
-    }
-
-    const url = URL.createObjectURL(file);
-    const video = document.createElement("video");
-    video.preload = "auto";
-    video.muted = true;
-    video.playsInline = true;
-    video.controls = false;
-    video.style.position = "fixed";
-    video.style.left = "0";
-    video.style.bottom = "0";
-    video.style.width = "1px";
-    video.style.height = "1px";
-    video.style.opacity = "0.01";
-    video.style.pointerEvents = "none";
-    video.style.zIndex = "-1";
-    video.src = url;
-    document.body.appendChild(video);
-
-    const cleanup = () => {
-      video.onloadedmetadata = null;
-      video.onerror = null;
-      video.pause();
-      video.removeAttribute("src");
-      video.load();
-      video.remove();
-      URL.revokeObjectURL(url);
-    };
-
-    video.onloadedmetadata = () => {
-      resolve({ video, cleanup });
-    };
-    video.onerror = () => {
-      cleanup();
-      reject(new Error("This video could not be prepared for upload."));
-    };
-  });
-}
-
-function waitForVideoEnd(video) {
-  return new Promise((resolve, reject) => {
-    video.onended = resolve;
-    video.onerror = () => reject(new Error("Video compression failed during playback."));
-  });
-}
-
-async function compressVideoForSupabase(file, { onProgress } = {}) {
-  const canRecord =
-    typeof MediaRecorder !== "undefined" &&
-    typeof document !== "undefined" &&
-    typeof HTMLCanvasElement !== "undefined";
-  if (!canRecord || file.size <= SUPABASE_FREE_OBJECT_TARGET_BYTES) {
-    return { file, compressed: false };
-  }
-
-  const preferredMime = MediaRecorder.isTypeSupported(COMPRESSED_VIDEO_MIME)
-    ? COMPRESSED_VIDEO_MIME
-    : MediaRecorder.isTypeSupported("video/webm;codecs=vp8")
-      ? "video/webm;codecs=vp8"
-      : MediaRecorder.isTypeSupported("video/webm")
-        ? "video/webm"
-        : "";
-
-  if (!preferredMime) {
-    throw new Error("This browser cannot compress the video before upload.");
-  }
-
-  const { video, cleanup } = await loadVideoElement(file);
-  try {
-    const sourceWidth = Number(video.videoWidth || 1280);
-    const sourceHeight = Number(video.videoHeight || 720);
-    const scale = Math.min(1, 1280 / Math.max(sourceWidth, sourceHeight));
-    const width = Math.max(2, Math.round((sourceWidth * scale) / 2) * 2);
-    const height = Math.max(2, Math.round((sourceHeight * scale) / 2) * 2);
-    const duration = Number(video.duration || 0);
-    const targetBits =
-      duration > 0
-        ? Math.floor(SUPABASE_FREE_OBJECT_TARGET_BYTES * 8 * 0.9)
-        : 18 * 1024 * 1024 * 8;
-    const bitrate = duration > 0
-      ? Math.max(650_000, Math.min(2_500_000, Math.floor(targetBits / duration)))
-      : 1_500_000;
-
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Video compression could not access the canvas.");
-
-    const stream = canvas.captureStream(24);
-    const recorder = new MediaRecorder(stream, {
-      mimeType: preferredMime,
-      videoBitsPerSecond: bitrate,
-    });
-    const chunks = [];
-    recorder.ondataavailable = (event) => {
-      if (event.data?.size) chunks.push(event.data);
-    };
-
-    let rafId = 0;
-    let stopped = false;
-    const draw = () => {
-      if (stopped) return;
-      ctx.drawImage(video, 0, 0, width, height);
-      if (duration > 0 && typeof onProgress === "function") {
-        onProgress(Math.min(90, Math.max(3, (video.currentTime / duration) * 90)));
-      }
-      rafId = window.requestAnimationFrame(draw);
-    };
-
-    const done = new Promise((resolve, reject) => {
-      recorder.onstop = resolve;
-      recorder.onerror = () => reject(new Error("Video compression failed."));
-    });
-
-    recorder.start(1000);
-    rafId = window.requestAnimationFrame(draw);
-    try {
-      await video.play();
-    } catch {
-      stopped = true;
-      if (rafId) window.cancelAnimationFrame(rafId);
-      if (recorder.state !== "inactive") {
-        recorder.stop();
-        await done.catch(() => {});
-      }
-      throw new Error(
-        "Video compression was paused by the browser. Keep this tab visible and try again.",
-      );
-    }
-    await waitForVideoEnd(video);
-    stopped = true;
-    if (rafId) window.cancelAnimationFrame(rafId);
-    recorder.stop();
-    await done;
-
-    const blob = new Blob(chunks, { type: "video/webm" });
-    if (blob.size > SUPABASE_FREE_OBJECT_TARGET_BYTES) {
-      throw new Error(
-        `The compressed video is still too large (${formatFileSize(blob.size)}). Please split this clip into shorter parts.`,
-      );
-    }
-
-    const compressedFile = new File(
-      [blob],
-      `${file.name.replace(/\.[^.]+$/, "")}-compressed.webm`,
-      {
-        type: "video/webm",
-        lastModified: Date.now(),
-      },
-    );
-    onProgress?.(100);
-    return { file: compressedFile, compressed: true, originalSizeBytes: file.size };
-  } finally {
-    cleanup();
-  }
 }
 
 function uploadLargeVideo(file, onProgress) {
@@ -499,19 +334,9 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
       const uploadedVideos = [];
       let completedBytes = 0;
       for (const [index, item] of files.entries()) {
-        const prepared = await compressVideoForSupabase(item, {
-          onProgress: (compressProgress) => {
-            const currentBytes =
-              (Number(compressProgress || 0) / 100) * item.size * 0.5;
-            setUploadProgress(
-              Math.round(((completedBytes + currentBytes) / totalFileSize) * 100),
-            );
-          },
-        });
-        const uploadFile = prepared.file;
-        const uploaded = await uploadLargeVideo(uploadFile, (fileProgress) => {
+        const uploaded = await uploadLargeVideo(item, (fileProgress) => {
           const currentBytes =
-            item.size * 0.5 + (Number(fileProgress || 0) / 100) * item.size * 0.5;
+            (Number(fileProgress || 0) / 100) * item.size;
           setUploadProgress(
             Math.round(((completedBytes + currentBytes) / totalFileSize) * 100),
           );
@@ -522,11 +347,11 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
         completedBytes += item.size;
         uploadedVideos.push({
           videoUrl: uploaded.url,
-          originalName: uploadFile.name,
+          originalName: item.name,
           sourceOriginalName: item.name,
           fileSizeBytes: uploaded.sizeBytes || item.size,
           originalFileSizeBytes: item.size,
-          compressed: Boolean(prepared.compressed),
+          compressed: false,
           index,
         });
       }
