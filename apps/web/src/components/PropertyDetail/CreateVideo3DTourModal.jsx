@@ -124,9 +124,27 @@ function loadVideoElement(file) {
     video.preload = "auto";
     video.muted = true;
     video.playsInline = true;
+    video.controls = false;
+    video.style.position = "fixed";
+    video.style.left = "0";
+    video.style.bottom = "0";
+    video.style.width = "1px";
+    video.style.height = "1px";
+    video.style.opacity = "0.01";
+    video.style.pointerEvents = "none";
+    video.style.zIndex = "-1";
     video.src = url;
+    document.body.appendChild(video);
 
-    const cleanup = () => URL.revokeObjectURL(url);
+    const cleanup = () => {
+      video.onloadedmetadata = null;
+      video.onerror = null;
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+      video.remove();
+      URL.revokeObjectURL(url);
+    };
 
     video.onloadedmetadata = () => {
       resolve({ video, cleanup });
@@ -216,7 +234,19 @@ async function compressVideoForSupabase(file, { onProgress } = {}) {
 
     recorder.start(1000);
     rafId = window.requestAnimationFrame(draw);
-    await video.play();
+    try {
+      await video.play();
+    } catch {
+      stopped = true;
+      if (rafId) window.cancelAnimationFrame(rafId);
+      if (recorder.state !== "inactive") {
+        recorder.stop();
+        await done.catch(() => {});
+      }
+      throw new Error(
+        "Video compression was paused by the browser. Keep this tab visible and try again.",
+      );
+    }
     await waitForVideoEnd(video);
     stopped = true;
     if (rafId) window.cancelAnimationFrame(rafId);
