@@ -36,6 +36,9 @@ async function uploadViaServer(file, { fallbackName, reportProgress }) {
     url: body.url,
     mimeType: body.mimeType || file.type || "application/octet-stream",
     sizeBytes: body.sizeBytes || file.size || null,
+    provider: body.provider || null,
+    objectPath: body.objectPath || body.path || null,
+    bucket: body.bucket || null,
   };
 }
 
@@ -159,7 +162,12 @@ export async function uploadLargeFile(file, { fallbackName = "upload", onProgres
   reportProgress(5);
 
   if (signBody?.uploadMethod === "signed-put") {
-    return await uploadViaSignedPut(file, signBody, reportProgress);
+    try {
+      return await uploadViaSignedPut(file, signBody, reportProgress);
+    } catch (error) {
+      console.warn("Signed large upload failed; retrying through server.", error);
+      return uploadViaServer(file, { fallbackName, reportProgress });
+    }
   }
 
   try {

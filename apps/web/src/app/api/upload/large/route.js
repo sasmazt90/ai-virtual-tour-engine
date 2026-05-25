@@ -1,11 +1,5 @@
 import crypto from "node:crypto";
 import { auth } from "@/auth";
-import {
-  AI_VIDEO_3D_MAX_BYTES,
-  AI_VIDEO_3D_MAX_MB,
-} from "@/app/api/utils/pricing";
-
-const MAX_FILE_BYTES = AI_VIDEO_3D_MAX_BYTES;
 
 const VIDEO_EXTENSIONS = {
   "video/mp4": "mp4",
@@ -23,6 +17,7 @@ const MODEL_EXTENSIONS = {
 const SAFE_EXTENSIONS = new Set(["mp4", "mov", "m4v", "webm", "ply", "splat", "ksplat"]);
 const VIDEO_SAFE_EXTENSIONS = new Set(["mp4", "mov", "m4v", "webm"]);
 const MODEL_SAFE_EXTENSIONS = new Set(["ply", "splat", "ksplat"]);
+const S3_MAX_PRESIGN_EXPIRES_SECONDS = 7 * 24 * 60 * 60;
 
 function getSupabaseStorageConfig() {
   const url = process.env.SUPABASE_URL;
@@ -35,6 +30,57 @@ function getSupabaseStorageConfig() {
     url: url.replace(/\/+$/, ""),
     bucket,
     serviceRoleKey,
+  };
+}
+
+function getExternalVideoStorageConfig() {
+  const endpoint =
+    process.env.VIDEO_UPLOAD_S3_ENDPOINT ||
+    process.env.RUNPOD_S3_ENDPOINT ||
+    process.env.S3_UPLOAD_ENDPOINT;
+  const bucket =
+    process.env.VIDEO_UPLOAD_S3_BUCKET ||
+    process.env.RUNPOD_S3_BUCKET ||
+    process.env.S3_UPLOAD_BUCKET;
+  const accessKeyId =
+    process.env.VIDEO_UPLOAD_S3_ACCESS_KEY_ID ||
+    process.env.RUNPOD_S3_ACCESS_KEY_ID ||
+    process.env.RUNPOD_S3_ACCESS_KEY ||
+    process.env.S3_UPLOAD_ACCESS_KEY_ID;
+  const secretAccessKey =
+    process.env.VIDEO_UPLOAD_S3_SECRET_ACCESS_KEY ||
+    process.env.RUNPOD_S3_SECRET_ACCESS_KEY ||
+    process.env.RUNPOD_S3_SECRET_KEY ||
+    process.env.S3_UPLOAD_SECRET_ACCESS_KEY;
+
+  if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) return null;
+
+  return {
+    endpoint: endpoint.replace(/\/+$/, ""),
+    bucket,
+    accessKeyId,
+    secretAccessKey,
+    region:
+      process.env.VIDEO_UPLOAD_S3_REGION ||
+      process.env.RUNPOD_S3_REGION ||
+      process.env.S3_UPLOAD_REGION ||
+      "us-east-1",
+    publicBaseUrl:
+      process.env.VIDEO_UPLOAD_S3_PUBLIC_BASE_URL ||
+      process.env.RUNPOD_S3_PUBLIC_BASE_URL ||
+      process.env.S3_UPLOAD_PUBLIC_BASE_URL ||
+      "",
+    signedGetExpiresSeconds: Math.min(
+      S3_MAX_PRESIGN_EXPIRES_SECONDS,
+      Math.max(
+        60,
+        Number(
+          process.env.VIDEO_UPLOAD_S3_SIGNED_GET_EXPIRES_SECONDS ||
+            process.env.RUNPOD_S3_SIGNED_GET_EXPIRES_SECONDS ||
+            S3_MAX_PRESIGN_EXPIRES_SECONDS,
+        ) || S3_MAX_PRESIGN_EXPIRES_SECONDS,
+      ),
+    ),
   };
 }
 
@@ -58,6 +104,108 @@ function folderForExtension(ext) {
   return "uploads";
 }
 
+function rfc3986(value) {
+  return encodeURIComponent(String(value)).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+function encodePath(path) {
+  return String(path || "")
+    .split("/")
+    .map(rfc3986)
+    .join("/");
+}
+
+function hmac(key, value, encoding) {
+  return crypto.createHmac("sha256", key).update(value, "utf8").digest(encoding);
+}
+
+function sha256Hex(value) {
+  return crypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function signingKey(secretAccessKey, dateStamp, region) {
+  const kDate = hmac(`AWS4${secretAccessKey}`, dateStamp);
+  const kRegion = hmac(kDate, region);
+  const kService = hmac(kRegion, "s3");
+  return hmac(kService, "aws4_request");
+}
+
+function formatAmzDate(date = new Date()) {
+  const iso = date.toISOString().replace(/[:-]|\.\d{3}/g, "");
+  return {
+    amzDate: iso,
+    dateStamp: iso.slice(0, 8),
+  };
+}
+
+function presignS3Url({
+  method,
+  endpoint,
+  bucket,
+  key,
+  region,
+  accessKeyId,
+  secretAccessKey,
+  expiresSeconds,
+}) {
+  const endpointUrl = new URL(endpoint);
+  const { amzDate, dateStamp } = formatAmzDate();
+  const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
+  const canonicalUri = `${endpointUrl.pathname.replace(/\/+$/, "")}/${rfc3986(bucket)}/${encodePath(key)}`;
+  const params = {
+    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Content-Sha256": "UNSIGNED-PAYLOAD",
+    "X-Amz-Credential": `${accessKeyId}/${credentialScope}`,
+    "X-Amz-Date": amzDate,
+    "X-Amz-Expires": String(expiresSeconds),
+    "X-Amz-SignedHeaders": "host",
+  };
+  const canonicalQuery = Object.entries(params)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([keyName, value]) => `${rfc3986(keyName)}=${rfc3986(value)}`)
+    .join("&");
+  const canonicalHeaders = `host:${endpointUrl.host}\n`;
+  const canonicalRequest = [
+    method,
+    canonicalUri,
+    canonicalQuery,
+    canonicalHeaders,
+    "host",
+    "UNSIGNED-PAYLOAD",
+  ].join("\n");
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    amzDate,
+    credentialScope,
+    sha256Hex(canonicalRequest),
+  ].join("\n");
+  const signature = hmac(
+    signingKey(secretAccessKey, dateStamp, region),
+    stringToSign,
+    "hex",
+  );
+  return `${endpointUrl.origin}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+}
+
+function publicOrSignedGetUrl(config, objectPath) {
+  if (config.publicBaseUrl) {
+    return `${config.publicBaseUrl.replace(/\/+$/, "")}/${encodePath(objectPath)}`;
+  }
+
+  return presignS3Url({
+    method: "GET",
+    endpoint: config.endpoint,
+    bucket: config.bucket,
+    key: objectPath,
+    region: config.region,
+    accessKeyId: config.accessKeyId,
+    secretAccessKey: config.secretAccessKey,
+    expiresSeconds: config.signedGetExpiresSeconds,
+  });
+}
+
 export async function POST(request) {
   try {
     const session = await auth();
@@ -65,27 +213,7 @@ export async function POST(request) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const config = getSupabaseStorageConfig();
-    if (!config) {
-      return Response.json(
-        { error: "Storage is not configured." },
-        { status: 500 },
-      );
-    }
-
     const contentLength = Number(request.headers.get("content-length") || 0);
-    if (
-      contentLength &&
-      Number.isFinite(MAX_FILE_BYTES) &&
-      contentLength > MAX_FILE_BYTES
-    ) {
-      return Response.json(
-        {
-          error: `File is too large. Please upload a file under ${AI_VIDEO_3D_MAX_MB} MB.`,
-        },
-        { status: 413 },
-      );
-    }
 
     if (!request.body) {
       return Response.json({ error: "Missing file body." }, { status: 400 });
@@ -109,6 +237,53 @@ export async function POST(request) {
     const objectPath = `${folderForExtension(ext)}/${new Date()
       .toISOString()
       .slice(0, 10)}/${crypto.randomUUID()}.${ext}`;
+
+    const externalVideoStorage = VIDEO_SAFE_EXTENSIONS.has(ext)
+      ? getExternalVideoStorageConfig()
+      : null;
+
+    if (externalVideoStorage) {
+      const uploadUrl = presignS3Url({
+        method: "PUT",
+        endpoint: externalVideoStorage.endpoint,
+        bucket: externalVideoStorage.bucket,
+        key: objectPath,
+        region: externalVideoStorage.region,
+        accessKeyId: externalVideoStorage.accessKeyId,
+        secretAccessKey: externalVideoStorage.secretAccessKey,
+        expiresSeconds: 60 * 60,
+      });
+      const response = await fetch(uploadUrl, {
+        method: "PUT",
+        body: request.body,
+        duplex: "half",
+      });
+
+      if (!response.ok) {
+        const bodyText = await response.text().catch(() => "");
+        throw new Error(
+          `S3 large upload failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ""}`,
+        );
+      }
+
+      return Response.json({
+        provider: "s3",
+        bucket: externalVideoStorage.bucket,
+        path: objectPath,
+        objectPath,
+        url: publicOrSignedGetUrl(externalVideoStorage, objectPath),
+        mimeType,
+        sizeBytes: contentLength || null,
+      });
+    }
+
+    const config = getSupabaseStorageConfig();
+    if (!config) {
+      return Response.json(
+        { error: "Storage is not configured." },
+        { status: 500 },
+      );
+    }
 
     const uploadUrl = `${config.url}/storage/v1/object/${encodeURIComponent(
       config.bucket,
