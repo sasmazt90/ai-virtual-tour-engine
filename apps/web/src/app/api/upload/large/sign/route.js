@@ -201,16 +201,9 @@ function publicOrSignedGetUrl(config, objectPath) {
     return `${config.publicBaseUrl.replace(/\/+$/, "")}/${encodePath(objectPath)}`;
   }
 
-  return presignS3Url({
-    method: "GET",
-    endpoint: config.endpoint,
-    bucket: config.bucket,
-    key: objectPath,
-    region: config.region,
-    accessKeyId: config.accessKeyId,
-    secretAccessKey: config.secretAccessKey,
-    expiresSeconds: config.signedGetExpiresSeconds,
-  });
+  const endpointUrl = new URL(config.endpoint);
+  const canonicalUri = `${endpointUrl.pathname.replace(/\/+$/, "")}/${rfc3986(config.bucket)}/${encodePath(objectPath)}`;
+  return `${endpointUrl.origin}${canonicalUri}`;
 }
 
 function publicUrlFor({ url, bucket, objectPath }) {
@@ -272,25 +265,14 @@ export async function POST(request) {
       .slice(0, 10)}/${crypto.randomUUID()}.${ext}`;
 
     if (externalVideoStorage) {
-      const signedUrl = presignS3Url({
-        method: "PUT",
-        endpoint: externalVideoStorage.endpoint,
-        bucket: externalVideoStorage.bucket,
-        key: objectPath,
-        region: externalVideoStorage.region,
-        accessKeyId: externalVideoStorage.accessKeyId,
-        secretAccessKey: externalVideoStorage.secretAccessKey,
-        expiresSeconds: 60 * 60,
-      });
       const publicUrl = publicOrSignedGetUrl(externalVideoStorage, objectPath);
 
       return Response.json({
         provider: "s3",
-        uploadMethod: "signed-put",
+        uploadMethod: "server-proxy",
         bucket: externalVideoStorage.bucket,
         path: objectPath,
         objectPath,
-        signedUrl,
         publicUrl,
         url: publicUrl,
         mimeType,

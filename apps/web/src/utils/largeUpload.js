@@ -161,6 +161,10 @@ export async function uploadLargeFile(file, { fallbackName = "upload", onProgres
 
   reportProgress(5);
 
+  if (signBody?.uploadMethod === "server-proxy") {
+    return uploadViaServer(file, { fallbackName, reportProgress });
+  }
+
   if (signBody?.uploadMethod === "signed-put") {
     try {
       return await uploadViaSignedPut(file, signBody, reportProgress);

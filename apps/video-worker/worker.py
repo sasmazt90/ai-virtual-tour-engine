@@ -358,7 +358,86 @@ def refund_credits_if_needed(conn, job, reason):
         )
 
 
-def download_video(source, out_path):
+def s3_request_headers(method, object_path, bucket=None, payload_hash="UNSIGNED-PAYLOAD"):
+    if not (
+        VIDEO_UPLOAD_S3_ENDPOINT
+        and (bucket or VIDEO_UPLOAD_S3_BUCKET)
+        and VIDEO_UPLOAD_S3_ACCESS_KEY_ID
+        and VIDEO_UPLOAD_S3_SECRET_ACCESS_KEY
+    ):
+        raise RuntimeError("S3 source video download failed: storage env is missing.")
+
+    endpoint = VIDEO_UPLOAD_S3_ENDPOINT.rstrip("/")
+    parsed = urllib.parse.urlparse(endpoint)
+    target_bucket = bucket or VIDEO_UPLOAD_S3_BUCKET
+    canonical_uri = (
+        f"{parsed.path.rstrip('/')}/"
+        f"{aws_uri_encode(target_bucket)}/{aws_path_encode(object_path)}"
+    )
+    url = f"{parsed.scheme}://{parsed.netloc}{canonical_uri}"
+    now = datetime.now(timezone.utc)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_stamp = now.strftime("%Y%m%d")
+    canonical_headers = (
+        f"host:{parsed.netloc}\n"
+        f"x-amz-content-sha256:{payload_hash}\n"
+        f"x-amz-date:{amz_date}\n"
+    )
+    signed_headers = "host;x-amz-content-sha256;x-amz-date"
+    canonical_request = "\n".join([
+        method,
+        canonical_uri,
+        "",
+        canonical_headers,
+        signed_headers,
+        payload_hash,
+    ])
+    credential_scope = f"{date_stamp}/{VIDEO_UPLOAD_S3_REGION}/s3/aws4_request"
+    string_to_sign = "\n".join([
+        "AWS4-HMAC-SHA256",
+        amz_date,
+        credential_scope,
+        hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+    ])
+    signature = hmac.new(
+        aws_signing_key(
+            VIDEO_UPLOAD_S3_SECRET_ACCESS_KEY,
+            date_stamp,
+            VIDEO_UPLOAD_S3_REGION,
+        ),
+        string_to_sign.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    headers = {
+        "Authorization": (
+            "AWS4-HMAC-SHA256 "
+            f"Credential={VIDEO_UPLOAD_S3_ACCESS_KEY_ID}/{credential_scope}, "
+            f"SignedHeaders={signed_headers}, Signature={signature}"
+        ),
+        "x-amz-content-sha256": payload_hash,
+        "x-amz-date": amz_date,
+    }
+    return url, headers
+
+
+def download_s3_object(object_path, out_path, bucket=None):
+    if not object_path:
+        raise RuntimeError("S3 source video download failed: missing object path.")
+
+    url, headers = s3_request_headers("GET", object_path, bucket=bucket)
+    with requests.get(url, headers=headers, stream=True, timeout=120) as res:
+        res.raise_for_status()
+        with open(out_path, "wb") as f:
+            for chunk in res.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+
+
+def download_video(source, out_path, storage_provider=None, object_path=None, bucket=None):
+    if storage_provider == "s3":
+        download_s3_object(object_path, out_path, bucket=bucket)
+        return
+
     parsed = urllib.parse.urlparse(str(source))
     if parsed.scheme == "file":
         local_path = Path(urllib.parse.unquote(parsed.path))
@@ -509,7 +588,13 @@ def extract_video_set(video_items, work_dir, images_dir):
         video_path = work_dir / f"input_video_{index:03d}"
         label = str(item.get("originalName") or f"Clip {index}")
         print(f"Downloading clip {index}/{video_count}", flush=True)
-        download_video(video_url, video_path)
+        download_video(
+            video_url,
+            video_path,
+            storage_provider=item.get("storageProvider"),
+            object_path=item.get("objectPath"),
+            bucket=item.get("bucket"),
+        )
         content_hash = file_sha256(video_path)
         if content_hash in seen_hashes:
             print(f"Skipping duplicate clip {index}/{video_count}", flush=True)
@@ -1618,12 +1703,18 @@ def process_job(conn, job):
                 "videoUrl": video_url,
                 "originalName": item.get("originalName") or item.get("name") or "",
                 "compressed": bool(item.get("compressed")),
+                "storageProvider": item.get("storageProvider") or "",
+                "objectPath": item.get("objectPath") or "",
+                "bucket": item.get("bucket") or "",
             })
     else:
         video_url = request_payload.get("videoUrl") or request_payload.get("localPath")
         video_items = [{
             "videoUrl": video_url,
             "originalName": request_payload.get("originalName") or "",
+            "storageProvider": request_payload.get("storageProvider") or "",
+            "objectPath": request_payload.get("objectPath") or "",
+            "bucket": request_payload.get("bucket") or "",
         }] if video_url else []
 
     if not video_items:

@@ -165,7 +165,10 @@ export async function POST(request) {
 
     const verifiedVideos = [];
     for (const input of videoInputs) {
-      const remoteFileSizeBytes = await getRemoteContentLength(input.videoUrl);
+      const remoteFileSizeBytes =
+        input.storageProvider === "s3" && input.objectPath
+          ? 0
+          : await getRemoteContentLength(input.videoUrl);
       const fileSizeBytes = Math.max(input.fileSizeBytes, remoteFileSizeBytes);
       if (!Number.isFinite(fileSizeBytes) || fileSizeBytes <= 0) {
         return Response.json(

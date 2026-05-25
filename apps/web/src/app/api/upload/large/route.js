@@ -189,21 +189,61 @@ function presignS3Url({
   return `${endpointUrl.origin}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
+function signedS3Request({ method, endpoint, bucket, key, region, accessKeyId, secretAccessKey }) {
+  const endpointUrl = new URL(endpoint);
+  const { amzDate, dateStamp } = formatAmzDate();
+  const payloadHash = "UNSIGNED-PAYLOAD";
+  const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
+  const canonicalUri = `${endpointUrl.pathname.replace(/\/+$/, "")}/${rfc3986(bucket)}/${encodePath(key)}`;
+  const canonicalHeaders = [
+    `host:${endpointUrl.host}`,
+    `x-amz-content-sha256:${payloadHash}`,
+    `x-amz-date:${amzDate}`,
+    "",
+  ].join("\n");
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  const canonicalRequest = [
+    method,
+    canonicalUri,
+    "",
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join("\n");
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    amzDate,
+    credentialScope,
+    sha256Hex(canonicalRequest),
+  ].join("\n");
+  const signature = hmac(
+    signingKey(secretAccessKey, dateStamp, region),
+    stringToSign,
+    "hex",
+  );
+
+  return {
+    url: `${endpointUrl.origin}${canonicalUri}`,
+    headers: {
+      Authorization: (
+        "AWS4-HMAC-SHA256 " +
+        `Credential=${accessKeyId}/${credentialScope}, ` +
+        `SignedHeaders=${signedHeaders}, Signature=${signature}`
+      ),
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": amzDate,
+    },
+  };
+}
+
 function publicOrSignedGetUrl(config, objectPath) {
   if (config.publicBaseUrl) {
     return `${config.publicBaseUrl.replace(/\/+$/, "")}/${encodePath(objectPath)}`;
   }
 
-  return presignS3Url({
-    method: "GET",
-    endpoint: config.endpoint,
-    bucket: config.bucket,
-    key: objectPath,
-    region: config.region,
-    accessKeyId: config.accessKeyId,
-    secretAccessKey: config.secretAccessKey,
-    expiresSeconds: config.signedGetExpiresSeconds,
-  });
+  const endpointUrl = new URL(config.endpoint);
+  const canonicalUri = `${endpointUrl.pathname.replace(/\/+$/, "")}/${rfc3986(config.bucket)}/${encodePath(objectPath)}`;
+  return `${endpointUrl.origin}${canonicalUri}`;
 }
 
 export async function POST(request) {
@@ -243,7 +283,7 @@ export async function POST(request) {
       : null;
 
     if (externalVideoStorage) {
-      const uploadUrl = presignS3Url({
+      const uploadRequest = signedS3Request({
         method: "PUT",
         endpoint: externalVideoStorage.endpoint,
         bucket: externalVideoStorage.bucket,
@@ -251,10 +291,10 @@ export async function POST(request) {
         region: externalVideoStorage.region,
         accessKeyId: externalVideoStorage.accessKeyId,
         secretAccessKey: externalVideoStorage.secretAccessKey,
-        expiresSeconds: 60 * 60,
       });
-      const response = await fetch(uploadUrl, {
+      const response = await fetch(uploadRequest.url, {
         method: "PUT",
+        headers: uploadRequest.headers,
         body: request.body,
         duplex: "half",
       });
