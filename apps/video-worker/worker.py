@@ -1,5 +1,6 @@
 import json
 import hashlib
+import hmac
 import math
 import os
 import re
@@ -10,6 +11,7 @@ import tempfile
 import time
 import urllib.parse
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg
@@ -20,6 +22,34 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "uploads")
+VIDEO_UPLOAD_S3_ENDPOINT = (
+    os.getenv("VIDEO_UPLOAD_S3_ENDPOINT")
+    or os.getenv("RUNPOD_S3_ENDPOINT")
+    or os.getenv("S3_UPLOAD_ENDPOINT")
+)
+VIDEO_UPLOAD_S3_BUCKET = (
+    os.getenv("VIDEO_UPLOAD_S3_BUCKET")
+    or os.getenv("RUNPOD_S3_BUCKET")
+    or os.getenv("S3_UPLOAD_BUCKET")
+)
+VIDEO_UPLOAD_S3_ACCESS_KEY_ID = (
+    os.getenv("VIDEO_UPLOAD_S3_ACCESS_KEY_ID")
+    or os.getenv("RUNPOD_S3_ACCESS_KEY_ID")
+    or os.getenv("RUNPOD_S3_ACCESS_KEY")
+    or os.getenv("S3_UPLOAD_ACCESS_KEY_ID")
+)
+VIDEO_UPLOAD_S3_SECRET_ACCESS_KEY = (
+    os.getenv("VIDEO_UPLOAD_S3_SECRET_ACCESS_KEY")
+    or os.getenv("RUNPOD_S3_SECRET_ACCESS_KEY")
+    or os.getenv("RUNPOD_S3_SECRET_KEY")
+    or os.getenv("S3_UPLOAD_SECRET_ACCESS_KEY")
+)
+VIDEO_UPLOAD_S3_REGION = (
+    os.getenv("VIDEO_UPLOAD_S3_REGION")
+    or os.getenv("RUNPOD_S3_REGION")
+    or os.getenv("S3_UPLOAD_REGION")
+    or "us-east-1"
+)
 OPEN_SPLAT_BIN = os.getenv("OPEN_SPLAT_BIN", "opensplat")
 WORKER_POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "10"))
 FRAME_RATE = float(os.getenv("FRAME_RATE", "2.6"))
@@ -1396,6 +1426,98 @@ def delete_storage_object(object_path):
     return True
 
 
+def aws_uri_encode(value):
+    return urllib.parse.quote(str(value or ""), safe="-_.~")
+
+
+def aws_path_encode(path):
+    return "/".join(aws_uri_encode(part) for part in str(path or "").split("/"))
+
+
+def aws_signing_key(secret_key, date_stamp, region):
+    k_date = hmac.new(
+        f"AWS4{secret_key}".encode("utf-8"),
+        date_stamp.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    k_region = hmac.new(k_date, region.encode("utf-8"), hashlib.sha256).digest()
+    k_service = hmac.new(k_region, b"s3", hashlib.sha256).digest()
+    return hmac.new(k_service, b"aws4_request", hashlib.sha256).digest()
+
+
+def delete_s3_object(object_path, bucket=None):
+    if not object_path:
+        return False
+    if not (
+        VIDEO_UPLOAD_S3_ENDPOINT
+        and (bucket or VIDEO_UPLOAD_S3_BUCKET)
+        and VIDEO_UPLOAD_S3_ACCESS_KEY_ID
+        and VIDEO_UPLOAD_S3_SECRET_ACCESS_KEY
+    ):
+        print("S3 source video cleanup skipped: storage env is missing.", flush=True)
+        return False
+
+    endpoint = VIDEO_UPLOAD_S3_ENDPOINT.rstrip("/")
+    parsed = urllib.parse.urlparse(endpoint)
+    target_bucket = bucket or VIDEO_UPLOAD_S3_BUCKET
+    canonical_uri = (
+        f"{parsed.path.rstrip('/')}/"
+        f"{aws_uri_encode(target_bucket)}/{aws_path_encode(object_path)}"
+    )
+    url = f"{parsed.scheme}://{parsed.netloc}{canonical_uri}"
+    now = datetime.now(timezone.utc)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_stamp = now.strftime("%Y%m%d")
+    payload_hash = hashlib.sha256(b"").hexdigest()
+    canonical_headers = (
+        f"host:{parsed.netloc}\n"
+        f"x-amz-content-sha256:{payload_hash}\n"
+        f"x-amz-date:{amz_date}\n"
+    )
+    signed_headers = "host;x-amz-content-sha256;x-amz-date"
+    canonical_request = "\n".join([
+        "DELETE",
+        canonical_uri,
+        "",
+        canonical_headers,
+        signed_headers,
+        payload_hash,
+    ])
+    credential_scope = f"{date_stamp}/{VIDEO_UPLOAD_S3_REGION}/s3/aws4_request"
+    string_to_sign = "\n".join([
+        "AWS4-HMAC-SHA256",
+        amz_date,
+        credential_scope,
+        hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+    ])
+    signature = hmac.new(
+        aws_signing_key(
+            VIDEO_UPLOAD_S3_SECRET_ACCESS_KEY,
+            date_stamp,
+            VIDEO_UPLOAD_S3_REGION,
+        ),
+        string_to_sign.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    headers = {
+        "Authorization": (
+            "AWS4-HMAC-SHA256 "
+            f"Credential={VIDEO_UPLOAD_S3_ACCESS_KEY_ID}/{credential_scope}, "
+            f"SignedHeaders={signed_headers}, Signature={signature}"
+        ),
+        "x-amz-content-sha256": payload_hash,
+        "x-amz-date": amz_date,
+    }
+    response = requests.delete(url, headers=headers, timeout=60)
+    if not response.ok and response.status_code != 404:
+        print(
+            f"S3 source video cleanup failed: {response.status_code} {response.reason} {object_path}",
+            flush=True,
+        )
+        return False
+    return True
+
+
 def cleanup_source_videos(job):
     request_payload = job.get("request_payload") or {}
     videos = request_payload.get("videos")
@@ -1403,6 +1525,10 @@ def cleanup_source_videos(job):
     removed = 0
     for item in items:
         if not isinstance(item, dict):
+            continue
+        if item.get("storageProvider") == "s3":
+            if delete_s3_object(item.get("objectPath"), bucket=item.get("bucket")):
+                removed += 1
             continue
         object_path = item.get("objectPath") or storage_object_path_from_public_url(
             item.get("videoUrl") or item.get("url")

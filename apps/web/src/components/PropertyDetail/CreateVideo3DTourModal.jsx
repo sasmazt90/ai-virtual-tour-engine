@@ -352,6 +352,9 @@ export function CreateVideo3DTourModal({ open, onClose, propertyId, userId }) {
           fileSizeBytes: uploaded.sizeBytes || item.size,
           originalFileSizeBytes: item.size,
           compressed: false,
+          storageProvider: uploaded.provider || null,
+          objectPath: uploaded.objectPath || null,
+          bucket: uploaded.bucket || null,
           index,
         });
       }

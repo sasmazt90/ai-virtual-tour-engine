@@ -88,6 +88,45 @@ async function uploadViaTus(file, signBody, reportProgress) {
   };
 }
 
+async function uploadViaSignedPut(file, signBody, reportProgress) {
+  if (!signBody?.signedUrl) {
+    throw new Error("Could not prepare upload.");
+  }
+
+  reportProgress(5);
+
+  await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", signBody.signedUrl, true);
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      const percent = (event.loaded / event.total) * 95 + 5;
+      reportProgress(percent);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+        return;
+      }
+      reject(new Error(`Large file upload failed: ${xhr.status}`));
+    };
+    xhr.onerror = () => reject(new Error("Large file upload failed."));
+    xhr.onabort = () => reject(new Error("Large file upload was cancelled."));
+    xhr.send(file);
+  });
+
+  reportProgress(100);
+
+  return {
+    url: signBody.publicUrl || signBody.url,
+    mimeType: file.type || signBody.mimeType || "application/octet-stream",
+    sizeBytes: file.size || signBody.sizeBytes || null,
+    provider: signBody.provider || "s3",
+    objectPath: signBody.objectPath || signBody.path || null,
+    bucket: signBody.bucket || null,
+  };
+}
+
 export async function uploadLargeFile(file, { fallbackName = "upload", onProgress } = {}) {
   if (!file) throw new Error("Choose a file first.");
 
@@ -118,6 +157,10 @@ export async function uploadLargeFile(file, { fallbackName = "upload", onProgres
   }
 
   reportProgress(5);
+
+  if (signBody?.uploadMethod === "signed-put") {
+    return await uploadViaSignedPut(file, signBody, reportProgress);
+  }
 
   try {
     return await uploadViaTus(file, signBody, reportProgress);

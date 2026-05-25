@@ -36,6 +36,20 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: VIDEO_UPLOAD_S3_ENDPOINT
+        sync: false
+      - key: VIDEO_UPLOAD_S3_REGION
+        sync: false
+      - key: VIDEO_UPLOAD_S3_BUCKET
+        sync: false
+      - key: VIDEO_UPLOAD_S3_ACCESS_KEY_ID
+        sync: false
+      - key: VIDEO_UPLOAD_S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: VIDEO_UPLOAD_S3_PUBLIC_BASE_URL
+        sync: false
+      - key: VIDEO_UPLOAD_S3_SIGNED_GET_EXPIRES_SECONDS
+        value: "604800"
       - key: OPEN_AI_API_KEY
         sync: false
       - key: STRIPE_SECRET_KEY

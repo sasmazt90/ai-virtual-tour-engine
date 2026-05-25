@@ -49,6 +49,13 @@ function normalizeVideoInputs(body) {
               ? item.name.trim()
               : "",
         fileSizeBytes: Number(item?.fileSizeBytes || item?.sizeBytes || 0) || 0,
+        storageProvider:
+          typeof item?.storageProvider === "string"
+            ? item.storageProvider.trim()
+            : "",
+        objectPath:
+          typeof item?.objectPath === "string" ? item.objectPath.trim() : "",
+        bucket: typeof item?.bucket === "string" ? item.bucket.trim() : "",
         index,
       }))
       .filter((item) => item.videoUrl);
@@ -65,6 +72,13 @@ function normalizeVideoInputs(body) {
               ? body.originalName.trim()
               : "",
           fileSizeBytes: Number(body?.fileSizeBytes || 0) || 0,
+          storageProvider:
+            typeof body?.storageProvider === "string"
+              ? body.storageProvider.trim()
+              : "",
+          objectPath:
+            typeof body?.objectPath === "string" ? body.objectPath.trim() : "",
+          bucket: typeof body?.bucket === "string" ? body.bucket.trim() : "",
           index: 0,
         },
       ]
@@ -163,6 +177,9 @@ export async function POST(request) {
         videoUrl: input.videoUrl,
         originalName: input.originalName || null,
         fileSizeBytes,
+        storageProvider: input.storageProvider || null,
+        objectPath: input.objectPath || null,
+        bucket: input.bucket || null,
         index: input.index,
       });
     }
