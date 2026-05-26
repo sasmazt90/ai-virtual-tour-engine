@@ -18,6 +18,7 @@ const SAFE_EXTENSIONS = new Set(["mp4", "mov", "m4v", "webm", "ply", "splat", "k
 const VIDEO_SAFE_EXTENSIONS = new Set(["mp4", "mov", "m4v", "webm"]);
 const MODEL_SAFE_EXTENSIONS = new Set(["ply", "splat", "ksplat"]);
 const S3_MAX_PRESIGN_EXPIRES_SECONDS = 7 * 24 * 60 * 60;
+const S3_MULTIPART_PART_BYTES = 32 * 1024 * 1024;
 
 function getSupabaseStorageConfig() {
   const url = process.env.SUPABASE_URL;
@@ -189,12 +190,29 @@ function presignS3Url({
   return `${endpointUrl.origin}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
-function signedS3Request({ method, endpoint, bucket, key, region, accessKeyId, secretAccessKey }) {
+function canonicalQueryString(query = {}) {
+  return Object.entries(query)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([keyName, value]) => `${rfc3986(keyName)}=${rfc3986(value)}`)
+    .join("&");
+}
+
+function signedS3Request({
+  method,
+  endpoint,
+  bucket,
+  key,
+  region,
+  accessKeyId,
+  secretAccessKey,
+  query = {},
+}) {
   const endpointUrl = new URL(endpoint);
   const { amzDate, dateStamp } = formatAmzDate();
   const payloadHash = "UNSIGNED-PAYLOAD";
   const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
   const canonicalUri = `${endpointUrl.pathname.replace(/\/+$/, "")}/${rfc3986(bucket)}/${encodePath(key)}`;
+  const canonicalQuery = canonicalQueryString(query);
   const canonicalHeaders = [
     `host:${endpointUrl.host}`,
     `x-amz-content-sha256:${payloadHash}`,
@@ -205,7 +223,7 @@ function signedS3Request({ method, endpoint, bucket, key, region, accessKeyId, s
   const canonicalRequest = [
     method,
     canonicalUri,
-    "",
+    canonicalQuery,
     canonicalHeaders,
     signedHeaders,
     payloadHash,
@@ -223,7 +241,7 @@ function signedS3Request({ method, endpoint, bucket, key, region, accessKeyId, s
   );
 
   return {
-    url: `${endpointUrl.origin}${canonicalUri}`,
+    url: `${endpointUrl.origin}${canonicalUri}${canonicalQuery ? `?${canonicalQuery}` : ""}`,
     headers: {
       Authorization: (
         "AWS4-HMAC-SHA256 " +
@@ -244,6 +262,156 @@ function publicOrSignedGetUrl(config, objectPath) {
   const endpointUrl = new URL(config.endpoint);
   const canonicalUri = `${endpointUrl.pathname.replace(/\/+$/, "")}/${rfc3986(config.bucket)}/${encodePath(objectPath)}`;
   return `${endpointUrl.origin}${canonicalUri}`;
+}
+
+function uploadIdFromXml(xml) {
+  const match = String(xml || "").match(/<UploadId>([^<]+)<\/UploadId>/i);
+  return match?.[1] || "";
+}
+
+function xmlEscape(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+async function s3Fetch(config, method, objectPath, { query, body } = {}) {
+  const uploadRequest = signedS3Request({
+    method,
+    endpoint: config.endpoint,
+    bucket: config.bucket,
+    key: objectPath,
+    region: config.region,
+    accessKeyId: config.accessKeyId,
+    secretAccessKey: config.secretAccessKey,
+    query,
+  });
+  return fetch(uploadRequest.url, {
+    method,
+    headers: uploadRequest.headers,
+    body,
+    duplex: body ? "half" : undefined,
+  });
+}
+
+async function initiateMultipartUpload(config, objectPath) {
+  const response = await s3Fetch(config, "POST", objectPath, {
+    query: { uploads: "" },
+  });
+  const bodyText = await response.text().catch(() => "");
+  if (!response.ok) {
+    throw new Error(
+      `S3 multipart upload init failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ""}`,
+    );
+  }
+
+  const uploadId = uploadIdFromXml(bodyText);
+  if (!uploadId) {
+    throw new Error("S3 multipart upload init failed: missing upload ID.");
+  }
+  return uploadId;
+}
+
+async function uploadMultipartPart(config, objectPath, uploadId, partNumber, partBuffer) {
+  const response = await s3Fetch(config, "PUT", objectPath, {
+    query: { partNumber: String(partNumber), uploadId },
+    body: partBuffer,
+  });
+  const bodyText = response.ok ? "" : await response.text().catch(() => "");
+  if (!response.ok) {
+    throw new Error(
+      `S3 multipart upload part ${partNumber} failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ""}`,
+    );
+  }
+
+  const etag = response.headers.get("etag");
+  if (!etag) {
+    throw new Error(`S3 multipart upload part ${partNumber} failed: missing ETag.`);
+  }
+  return { partNumber, etag };
+}
+
+async function completeMultipartUpload(config, objectPath, uploadId, parts) {
+  const body = [
+    "<CompleteMultipartUpload>",
+    ...parts.map(
+      (part) =>
+        `<Part><PartNumber>${part.partNumber}</PartNumber><ETag>${xmlEscape(part.etag)}</ETag></Part>`,
+    ),
+    "</CompleteMultipartUpload>",
+  ].join("");
+  const response = await s3Fetch(config, "POST", objectPath, {
+    query: { uploadId },
+    body,
+  });
+  const bodyText = await response.text().catch(() => "");
+  if (!response.ok) {
+    throw new Error(
+      `S3 multipart upload complete failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ""}`,
+    );
+  }
+}
+
+async function abortMultipartUpload(config, objectPath, uploadId) {
+  if (!uploadId) return;
+  try {
+    await s3Fetch(config, "DELETE", objectPath, { query: { uploadId } });
+  } catch (error) {
+    console.warn("S3 multipart upload abort failed.", error);
+  }
+}
+
+function concatChunks(chunks, totalBytes) {
+  const result = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
+async function uploadS3Multipart(config, objectPath, body) {
+  const uploadId = await initiateMultipartUpload(config, objectPath);
+  const reader = body.getReader();
+  const parts = [];
+  const pendingChunks = [];
+  let pendingBytes = 0;
+  let partNumber = 1;
+
+  async function flushPart() {
+    if (pendingBytes <= 0) return;
+    const partBuffer = concatChunks(pendingChunks.splice(0), pendingBytes);
+    pendingBytes = 0;
+    parts.push(
+      await uploadMultipartPart(config, objectPath, uploadId, partNumber, partBuffer),
+    );
+    partNumber += 1;
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+      pendingChunks.push(value);
+      pendingBytes += value.byteLength;
+      if (pendingBytes >= S3_MULTIPART_PART_BYTES) {
+        await flushPart();
+      }
+    }
+    await flushPart();
+    if (parts.length === 0) {
+      throw new Error("S3 multipart upload failed: empty upload body.");
+    }
+    await completeMultipartUpload(config, objectPath, uploadId, parts);
+  } catch (error) {
+    await abortMultipartUpload(config, objectPath, uploadId);
+    throw error;
+  }
 }
 
 export async function POST(request) {
@@ -283,28 +451,7 @@ export async function POST(request) {
       : null;
 
     if (externalVideoStorage) {
-      const uploadRequest = signedS3Request({
-        method: "PUT",
-        endpoint: externalVideoStorage.endpoint,
-        bucket: externalVideoStorage.bucket,
-        key: objectPath,
-        region: externalVideoStorage.region,
-        accessKeyId: externalVideoStorage.accessKeyId,
-        secretAccessKey: externalVideoStorage.secretAccessKey,
-      });
-      const response = await fetch(uploadRequest.url, {
-        method: "PUT",
-        headers: uploadRequest.headers,
-        body: request.body,
-        duplex: "half",
-      });
-
-      if (!response.ok) {
-        const bodyText = await response.text().catch(() => "");
-        throw new Error(
-          `S3 large upload failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ""}`,
-        );
-      }
+      await uploadS3Multipart(externalVideoStorage, objectPath, request.body);
 
       return Response.json({
         provider: "s3",
