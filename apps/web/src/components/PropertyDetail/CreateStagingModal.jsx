@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
   ChevronRight,
-  Coins,
   Loader2,
   Sparkles,
 } from "lucide-react";
@@ -119,6 +118,7 @@ export default function CreateStagingModal({
 
   const [stagingJobId, setStagingJobId] = useState(null);
   const [lastCreditCost, setLastCreditCost] = useState(null);
+  const autoRefreshedJobRef = useRef(null);
 
   const [upload, { loading: uploadingFurniture }] = useUpload();
 
@@ -214,6 +214,7 @@ export default function CreateStagingModal({
   const jobProgress = jobData?.progress ?? 0;
   const jobError = jobData?.error || null;
   const jobResult = jobData?.result || null;
+  const isJobActive = jobStatus === "queued" || jobStatus === "running";
 
   const stagedSummary = useMemo(() => {
     if (!jobResult || typeof jobResult !== "object") return null;
@@ -229,8 +230,6 @@ export default function CreateStagingModal({
 
     return parts.length > 0 ? parts.join(" - ") : null;
   }, [jobResult]);
-
-  const stagingJobDone = jobStatus === "succeeded" || jobStatus === "failed";
 
   const jobStatusLabel =
     jobStatus === "queued"
@@ -324,6 +323,7 @@ export default function CreateStagingModal({
     onSuccess: (data) => {
       setAiError(null);
       setStagingJobId(data.jobId);
+      autoRefreshedJobRef.current = null;
       setLastCreditCost(
         Number(data?.creditCost ?? data?.creditsReserved ?? 0) || null,
       );
@@ -467,10 +467,21 @@ export default function CreateStagingModal({
     }
   }, [onRefreshAfterJob, propertyId, queryClient, userId]);
 
+  useEffect(() => {
+    if (!open) return;
+    if (!stagingJobId) return;
+    if (jobStatus !== "succeeded") return;
+    if (autoRefreshedJobRef.current === stagingJobId) return;
+
+    autoRefreshedJobRef.current = stagingJobId;
+    onClickRefresh();
+  }, [jobStatus, onClickRefresh, open, stagingJobId]);
+
   if (!open) return null;
 
   const disableActions =
     createStagingMutation.isPending ||
+    isJobActive ||
     uploadFurnitureMutation.isPending ||
     uploadingFurniture;
 
@@ -829,28 +840,38 @@ export default function CreateStagingModal({
             ) : null}
 
             <div className="flex flex-col items-end">
-              <div className="mb-1 inline-flex items-center gap-1 text-xs text-gray-700 dark:text-gray-300 font-jetbrains-mono">
-                <Coins size={14} />
-                <span>
-                  {Number(estimatedCredits || 0).toLocaleString()} credits
-                </span>
-              </div>
-
               <button
                 type="button"
-                disabled={disableActions || !canRun}
-                onClick={() => {
+                disabled={
+                  createStagingMutation.isPending ||
+                  uploadFurnitureMutation.isPending ||
+                  uploadingFurniture ||
+                  isJobActive ||
+                  (jobStatus !== "succeeded" && !canRun)
+                }
+                onClick={async () => {
+                  if (jobStatus === "succeeded") {
+                    await onClickRefresh();
+                    resetModalState();
+                    onClose();
+                    return;
+                  }
+
                   setAiError(null);
                   createStagingMutation.mutate();
                 }}
                 className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-[var(--brand)] hover:bg-[var(--brandHover)] text-white rounded-lg font-medium transition-colors disabled:opacity-50 font-jetbrains-mono"
               >
-                {createStagingMutation.isPending ? (
+                {createStagingMutation.isPending || isJobActive ? (
                   <Loader2 size={18} className="animate-spin" />
                 ) : (
                   <Sparkles size={18} />
                 )}
-                Generate Staging
+                {isJobActive
+                  ? "Generating..."
+                  : jobStatus === "succeeded"
+                    ? "View in Assets"
+                    : "Generate Staging"}
               </button>
             </div>
           </div>
@@ -861,15 +882,9 @@ export default function CreateStagingModal({
           {lastCreditCostLine ? <span>{` ${lastCreditCostLine}`}</span> : null}
         </div>
 
-        {stagingJobDone ? (
-          <div className="flex items-center justify-end">
-            <button
-              type="button"
-              onClick={onClickRefresh}
-              className="text-sm text-[var(--brandDark)] dark:text-[var(--brand)] hover:underline font-jetbrains-mono"
-            >
-              Refresh property assets
-            </button>
+        {jobStatus === "succeeded" ? (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200 font-jetbrains-mono">
+            Staging completed. Generated images have been added to Assets.
           </div>
         ) : null}
 

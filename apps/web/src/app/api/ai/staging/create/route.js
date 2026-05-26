@@ -152,7 +152,6 @@ export async function POST(request) {
             AND property_id = $2
             AND job_type = 'staging'
             AND job_status IN ('queued','running')
-            AND request_payload = $4::jsonb
           ORDER BY created_at DESC
           LIMIT 1
         ),

@@ -83,9 +83,14 @@ export function buildVacantLightingVariantText({ isNight }) {
   );
 }
 
-export function buildLightingVariantText({ isNight, isLightOn }) {
+export function buildLightingVariantText({
+  isNight,
+  isLightOn,
+  editMode = "lighting_only",
+}) {
   const time = isNight ? "NIGHT" : "DAY";
   const light = isLightOn ? "LIGHTS ON" : "LIGHTS OFF";
+  const isLightingOnly = editMode === "lighting_only";
 
   const base =
     `\nLIGHTING TARGET (VERY IMPORTANT):\n` +
@@ -107,43 +112,61 @@ export function buildLightingVariantText({ isNight, isLightOn }) {
     "- Do NOT change wall colors, floor materials, ceiling textures, or architectural elements.\n" +
     "- The ONLY change allowed is: lighting direction, intensity, color temperature, shadows, and reflections caused by the time-of-day and light-source state.\n";
 
+  const stagingChangeTarget =
+    "\nSTAGING CHANGE TARGET (CRITICAL):\n" +
+    "- This is the INITIAL staging generation, not a lighting-only edit.\n" +
+    "- Do NOT keep the room mostly unchanged. Apply a visible, coherent staging transformation in the selected style.\n" +
+    "- Replace or restyle movable furniture/decor as needed to match the staging style.\n" +
+    "- Preserve only architecture and permanent fixtures: walls, ceiling, floor shape/material, windows, doors, beams, columns, switches, outlets, radiators, plumbing, built-ins, camera angle, and framing.\n" +
+    "- Never resize, move, add, or remove windows/doors/openings. Window dimensions and positions are hard-locked.\n";
+
+  const effectiveBase = isLightingOnly
+    ? base
+    : base.includes("\nOBJECT FREEZE LOCK")
+      ? `${base.slice(0, base.indexOf("\nOBJECT FREEZE LOCK"))}${stagingChangeTarget}`
+      : `${base}${stagingChangeTarget}`;
+
+  const reminder = isLightingOnly
+    ? "- REMINDER: Keep ALL furniture and objects EXACTLY as they are in the input. Only lighting changes.\n"
+    : "- REMINDER: Preserve architecture exactly while applying the staging style to movable furniture/decor.\n";
+
   if (isNight) {
     if (isLightOn) {
       return (
-        base +
+        effectiveBase +
         "- It must feel like nighttime (dark exterior through windows).\n" +
         "- Turn ON ONLY existing visible light sources (e.g. a ceiling light already in the room).\n" +
         "- Do NOT add new lamps or new ceiling fixtures.\n" +
         "- If a TV/screen is visible, it may emit a subtle glow BUT no readable content/text.\n" +
-        "- REMINDER: Keep ALL furniture and objects EXACTLY as they are in the input. Only lighting changes.\n"
+        reminder
       );
     }
     return (
-      base +
+      effectiveBase +
       "- It must feel like nighttime (dark exterior through windows).\n" +
       "- Turn OFF all artificial lights (no lamps, no ceiling lights).\n" +
       "- Keep the room visible with realistic ambient exposure (camera long exposure feel), not pitch black.\n" +
-      "- REMINDER: Keep ALL furniture and objects EXACTLY as they are in the input. Only lighting changes.\n"
+      reminder
     );
   }
 
   // DAY
   if (isLightOn) {
     return (
-      base +
+      effectiveBase +
       "- It must feel like daytime with natural sunlight.\n" +
       "- Turn ON ONLY existing visible light sources (e.g. ceiling light already in the room) in addition to daylight.\n" +
       "- Do NOT add new lamps or new ceiling fixtures.\n" +
       "- If a TV/screen is visible, it may emit a subtle glow BUT no readable content/text.\n" +
-      "- REMINDER: Keep ALL furniture and objects EXACTLY as they are in the input. Only lighting changes.\n"
+      reminder
     );
   }
 
   return (
-    base +
+    effectiveBase +
     "- It must feel like daytime with natural sunlight.\n" +
     "- Turn OFF all artificial lights (no lamps, no ceiling lights).\n" +
-    "- REMINDER: Keep ALL furniture and objects EXACTLY as they are in the input. Only lighting changes.\n"
+    reminder
   );
 }
 

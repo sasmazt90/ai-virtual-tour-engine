@@ -48,7 +48,10 @@ export async function generateFurnishedVariants({
       stagingName,
       vacantRules,
       preferredItemsRule,
-      lightingVariantText: buildLightingVariantText(dayOff),
+      lightingVariantText: buildLightingVariantText({
+        ...dayOff,
+        editMode: "stage",
+      }),
       preferredItemsBlock,
       customAssetNotes,
       preferredItemUrls: furnitureReferenceUrls,

@@ -89,10 +89,15 @@ export async function generateStagingVariant({
     let generated = null;
 
     if (Array.isArray(sourceImageUrls) && sourceImageUrls.length > 0) {
+      const editImageUrls = [
+        ...sourceImageUrls,
+        ...(Array.isArray(preferredItemUrls) ? preferredItemUrls : []),
+      ].filter(Boolean);
+
       generated = await editImageWithOpenAI({
         openAiKey,
         prompt: imagePrompt,
-        imageUrls: sourceImageUrls,
+        imageUrls: editImageUrls,
         retries: 2,
       });
     } else {

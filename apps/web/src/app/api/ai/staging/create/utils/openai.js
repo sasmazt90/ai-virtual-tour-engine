@@ -202,6 +202,7 @@ function getExtensionForMime(mimeType) {
   const t = String(mimeType || "").toLowerCase();
   if (t.includes("png")) return "png";
   if (t.includes("jpeg") || t.includes("jpg")) return "jpg";
+  if (t.includes("webp")) return "webp";
   return "bin";
 }
 
@@ -444,7 +445,8 @@ export async function editImageWithOpenAI({
   }
 
   // IMPORTANT:
-  // We only use the first URL as the base image for now.
+  // The first URL is the room/base image. Additional URLs are reference images
+  // (for example furniture items) that GPT image edit models can use.
   const baseUrl = urls[0];
 
   const isOrgVerificationError = (e) => {
@@ -506,6 +508,27 @@ export async function editImageWithOpenAI({
     height: baseMeta?.height,
   });
 
+  const imageInputs = [{ blob, ext }];
+  for (const referenceUrl of urls.slice(1, 16)) {
+    const referenceMeta = await downloadImageAsBlob(referenceUrl);
+    const referenceBlob = referenceMeta.blob;
+    const referenceType = String(referenceBlob?.type || "").toLowerCase();
+    const referenceAccepted =
+      referenceType.includes("image/png") ||
+      referenceType.includes("image/jpeg") ||
+      referenceType.includes("image/jpg") ||
+      referenceType.includes("image/webp");
+
+    if (!referenceAccepted) {
+      continue;
+    }
+
+    imageInputs.push({
+      blob: referenceBlob,
+      ext: getExtensionForMime(referenceBlob?.type),
+    });
+  }
+
   for (const model of modelCandidates) {
     for (const size of sizeCandidates) {
       try {
@@ -514,8 +537,16 @@ export async function editImageWithOpenAI({
         form.append("prompt", prompt);
         form.append("n", "1");
         form.append("size", size);
-        // IMPORTANT: Do NOT send `response_format` or `quality` for gpt-image-* edits.
-        form.append("image", blob, `image.${ext}`);
+        form.append("quality", "high");
+        form.append("input_fidelity", "high");
+        // IMPORTANT: Do NOT send `response_format` for gpt-image-* edits.
+        if (imageInputs.length > 1) {
+          imageInputs.forEach((input, index) => {
+            form.append("image[]", input.blob, `image-${index}.${input.ext}`);
+          });
+        } else {
+          form.append("image", blob, `image.${ext}`);
+        }
 
         const res = await fetchWithRetry(
           "https://api.openai.com/v1/images/edits",
