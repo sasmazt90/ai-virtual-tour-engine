@@ -278,6 +278,13 @@ function xmlEscape(value) {
     .replace(/'/g, "&apos;");
 }
 
+function normalizeMultipartEtag(value) {
+  const trimmed = String(value || "").trim();
+  const withoutWeakPrefix = trimmed.startsWith("W/") ? trimmed.slice(2) : trimmed;
+  const unquoted = withoutWeakPrefix.replace(/^"+|"+$/g, "");
+  return `"${unquoted}"`;
+}
+
 async function s3Fetch(config, method, objectPath, { query, body } = {}) {
   const uploadRequest = signedS3Request({
     method,
@@ -331,7 +338,7 @@ async function uploadMultipartPart(config, objectPath, uploadId, partNumber, par
   if (!etag) {
     throw new Error(`S3 multipart upload part ${partNumber} failed: missing ETag.`);
   }
-  return { partNumber, etag };
+  return { partNumber, etag: normalizeMultipartEtag(etag) };
 }
 
 async function completeMultipartUpload(config, objectPath, uploadId, parts) {
