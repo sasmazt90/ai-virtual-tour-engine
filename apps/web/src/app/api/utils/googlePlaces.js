@@ -11,6 +11,11 @@ function pickGoogleMapsApiKey() {
 const OSM_USER_AGENT =
   process.env.OSM_USER_AGENT ||
   "360 Estate Suite/1.0 (real-estate surroundings lookup)";
+const OVERPASS_ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.osm.ch/api/interpreter",
+];
+const OSM_FETCH_TIMEOUT_MS = 15000;
 
 function toRad(x) {
   return (x * Math.PI) / 180;
@@ -139,7 +144,8 @@ export async function geocodeAddress({
   postalCode,
   country,
 }) {
-  const key = pickGoogleMapsApiKey();
+  const useGoogle = process.env.ENABLE_GOOGLE_PLACES_LOOKUP === "true";
+  const key = useGoogle ? pickGoogleMapsApiKey() : null;
   const address = buildAddressString({ addressLine, city, postalCode, country });
 
   if (!address) {
@@ -151,9 +157,9 @@ export async function geocodeAddress({
     if (osm) return osm;
 
     console.warn(
-      "geocodeAddress: No Google Maps API key available, and OpenStreetMap fallback failed.",
+      "geocodeAddress: OpenStreetMap geocoding failed.",
     );
-    return { ok: false, error: "Missing Google Maps API key" };
+    return { ok: false, error: "Could not geocode address with OpenStreetMap" };
   }
 
   // Try standard Geocoding API first
@@ -268,30 +274,41 @@ async function osmNearbySearch({
     out center ${Number(limit) || 80};
   `;
 
-  let res;
-  try {
-    res = await fetch("https://overpass-api.de/api/interpreter", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-        "User-Agent": OSM_USER_AGENT,
-      },
-      body: new URLSearchParams({ data: query }),
-    });
-  } catch (error) {
-    console.warn("osmNearbySearch: fetch failed", error);
-    return [];
+  let data = null;
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    let res;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), OSM_FETCH_TIMEOUT_MS);
+    try {
+      res = await fetch(endpoint, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+          "User-Agent": OSM_USER_AGENT,
+        },
+        body: new URLSearchParams({ data: query }),
+      });
+    } catch (error) {
+      console.warn("osmNearbySearch: fetch failed", endpoint, error);
+      continue;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    if (!res.ok) continue;
+
+    try {
+      data = await res.json();
+    } catch (error) {
+      console.warn("osmNearbySearch: failed to parse JSON", endpoint, error);
+      continue;
+    }
+
+    if (Array.isArray(data?.elements)) break;
   }
 
-  if (!res.ok) return [];
-
-  let data;
-  try {
-    data = await res.json();
-  } catch (error) {
-    console.warn("osmNearbySearch: failed to parse JSON", error);
-    return [];
-  }
+  if (!Array.isArray(data?.elements)) return [];
 
   const elements = Array.isArray(data?.elements) ? data.elements : [];
   return elements
@@ -319,7 +336,16 @@ async function osmNearbySearch({
           tags["addr:street"] || tags["addr:city"] || tags.operator || null,
         types: Object.entries(tags)
           .filter(([key]) =>
-            ["amenity", "shop", "railway", "highway", "station"].includes(key),
+            [
+              "amenity",
+              "building",
+              "healthcare",
+              "public_transport",
+              "railway",
+              "shop",
+              "station",
+              "highway",
+            ].includes(key),
           )
           .map(([key, value]) => `${key}:${value}`),
         distance_m: Math.round(meters),
@@ -345,8 +371,216 @@ function nameMatches(item, pattern) {
   return pattern.test(name);
 }
 
+function uniqueTop(items, predicate, limit = 3) {
+  const seen = new Set();
+  const matches = [];
+
+  for (const item of Array.isArray(items) ? items : []) {
+    if (predicate && !predicate(item)) continue;
+    const key = item.place_id || `${item.name}-${item.lat}-${item.lng}`;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    matches.push(item);
+    if (matches.length >= limit) break;
+  }
+
+  return matches;
+}
+
+function placeRecord(label, place) {
+  return {
+    label,
+    place,
+    name: place?.name || null,
+    vicinity: place?.vicinity || null,
+    distance_m: place?.distance_m ?? null,
+    place_id: place?.place_id || null,
+    types: place?.types || null,
+    lat: place?.lat ?? null,
+    lng: place?.lng ?? null,
+  };
+}
+
+function buildBalancedRecords(items, matchers, fallbackPredicate, limit = 5) {
+  const records = [];
+  const seen = new Set();
+  const add = (label, place) => {
+    if (!place) return;
+    const key = place.place_id || `${place.name}-${place.lat}-${place.lng}`;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    records.push(placeRecord(label, place));
+  };
+
+  for (const matcher of matchers) {
+    add(matcher.label, items.find(matcher.predicate));
+  }
+
+  for (const place of uniqueTop(items, fallbackPredicate, limit)) {
+    const label =
+      typeof fallbackPredicate?.labelFor === "function"
+        ? fallbackPredicate.labelFor(place)
+        : matchers.find((matcher) => matcher.predicate(place))?.label ||
+          "Nearby place";
+    add(label, place);
+    if (records.length >= limit) break;
+  }
+
+  return records.slice(0, limit);
+}
+
+function surroundingCounts(nearby) {
+  const surroundings =
+    nearby?.surroundings && typeof nearby.surroundings === "object"
+      ? nearby.surroundings
+      : {};
+  return {
+    transportation: Array.isArray(surroundings.transportation)
+      ? surroundings.transportation.length
+      : 0,
+    healthcare: Array.isArray(surroundings.healthcare)
+      ? surroundings.healthcare.length
+      : 0,
+    education: Array.isArray(surroundings.education)
+      ? surroundings.education.length
+      : 0,
+    shopping: Array.isArray(surroundings.shopping)
+      ? surroundings.shopping.length
+      : 0,
+  };
+}
+
+function hasMinimumSurroundings(nearby, minPerGroup = 3) {
+  return Object.values(surroundingCounts(nearby)).every(
+    (count) => count >= minPerGroup,
+  );
+}
+
+function mergeRecords(primary, secondary, limit = 6) {
+  const seen = new Set();
+  const merged = [];
+
+  for (const item of [...(primary || []), ...(secondary || [])]) {
+    const key = item?.place_id || `${item?.label}-${item?.name}-${item?.distance_m}`;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+    if (merged.length >= limit) break;
+  }
+
+  return merged;
+}
+
+function mergeNearbyResults(base, next) {
+  if (!base) return next;
+  if (!next) return base;
+
+  return {
+    ...base,
+    surroundings: {
+      transportation: mergeRecords(
+        base.surroundings?.transportation,
+        next.surroundings?.transportation,
+        6,
+      ),
+      healthcare: mergeRecords(
+        base.surroundings?.healthcare,
+        next.surroundings?.healthcare,
+        5,
+      ),
+      education: mergeRecords(
+        base.surroundings?.education,
+        next.surroundings?.education,
+        6,
+      ),
+      shopping: mergeRecords(
+        base.surroundings?.shopping,
+        next.surroundings?.shopping,
+        5,
+      ),
+    },
+    transport: mergeTop([base.transport, next.transport], 8),
+    health: mergeTop([base.health, next.health], 8),
+    education: mergeTop([base.education, next.education], 8),
+    shopping: mergeTop([base.shopping, next.shopping], 8),
+    computed_at: new Date().toISOString(),
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function transportationLabel(place) {
+  if (hasType(place, "amenity:charging_station")) return "EV Charging Station";
+  if (
+    hasType(place, "station:subway") ||
+    hasType(place, "railway:subway_entrance") ||
+    place?.tags?.subway === "yes"
+  ) {
+    return "Metro Station";
+  }
+  if (hasAnyType(place, ["railway:tram_stop", "station:light_rail"])) {
+    return "Tram Station";
+  }
+  if (hasAnyType(place, ["highway:bus_stop", "amenity:bus_station"])) {
+    return "Bus Stop";
+  }
+  if (hasType(place, "public_transport:station")) return "Transit Station";
+  return "Transportation";
+}
+
+function healthcareLabel(place) {
+  if (hasType(place, "amenity:hospital")) return "Hospital";
+  if (hasType(place, "amenity:clinic")) return "Clinic";
+  if (hasType(place, "amenity:doctors") || place?.tags?.healthcare === "doctor") {
+    return "Family Doctor";
+  }
+  if (hasType(place, "amenity:dentist") || place?.tags?.healthcare === "dentist") {
+    return "Dentist";
+  }
+  if (hasType(place, "amenity:pharmacy") || place?.tags?.healthcare === "pharmacy") {
+    return "Pharmacy";
+  }
+  return "Healthcare";
+}
+
+function educationLabel(place) {
+  if (hasAnyType(place, ["amenity:kindergarten", "amenity:childcare"])) {
+    return "Kindergarten / Preschool";
+  }
+  if (hasAnyType(place, ["amenity:university", "amenity:college"])) {
+    return "University";
+  }
+  const level = String(place?.tags?.["isced:level"] || "");
+  if (level.startsWith("1") || nameMatches(place, /primary|grundschule/i)) {
+    return "Primary School";
+  }
+  if (
+    level.startsWith("2") ||
+    nameMatches(place, /middle|secondary|mittelschule|realschule/i)
+  ) {
+    return "Middle School";
+  }
+  if (level.startsWith("3") || nameMatches(place, /high school|gymnasium|lyceum/i)) {
+    return "High School";
+  }
+  if (hasType(place, "amenity:school")) return "School";
+  return "Education";
+}
+
+function shoppingLabel(place) {
+  if (hasAnyType(place, ["shop:mall", "building:retail"])) return "Shopping Mall";
+  if (hasType(place, "shop:supermarket")) return "Supermarket";
+  if (hasType(place, "shop:convenience")) return "Convenience Store";
+  if (hasType(place, "shop:department_store")) return "Department Store";
+  if (hasType(place, "shop:bakery")) return "Bakery";
+  if (hasType(place, "shop:greengrocer")) return "Greengrocer";
+  return "Shopping";
+}
+
 async function buildNearbyPlacesFromOsm({ lat, lng }) {
-  const filters = [
+  const transportationFilters = [
     '["amenity"="charging_station"]',
     '["station"="subway"]',
     '["public_transport"="station"]["subway"="yes"]',
@@ -357,39 +591,244 @@ async function buildNearbyPlacesFromOsm({ lat, lng }) {
     '["amenity"="bus_station"]',
     '["railway"="tram_stop"]',
     '["station"="light_rail"]',
+  ];
+  const healthcareFilters = [
     '["amenity"="hospital"]',
     '["amenity"="clinic"]',
     '["amenity"="doctors"]',
+    '["amenity"="dentist"]',
+    '["amenity"="pharmacy"]',
+    '["healthcare"~"doctor|clinic|hospital|dentist|pharmacy"]',
+  ];
+  const educationFilters = [
     '["amenity"="kindergarten"]',
     '["amenity"="childcare"]',
     '["amenity"="school"]',
     '["amenity"="university"]',
     '["amenity"="college"]',
+  ];
+  const shoppingFilters = [
     '["shop"="mall"]',
     '["building"="retail"]',
     '["shop"="supermarket"]',
+    '["shop"="convenience"]',
+    '["shop"="department_store"]',
+    '["shop"="bakery"]',
+    '["shop"="greengrocer"]',
   ];
 
-  const items = await osmNearbySearch({
+  const transportationItems = await osmNearbySearch({
     lat,
     lng,
-    filters,
+    filters: transportationFilters,
     radiusMeters: 7000,
-    limit: 2000,
+    limit: 500,
   });
+  const healthcareItems = await osmNearbySearch({
+    lat,
+    lng,
+    filters: healthcareFilters,
+    radiusMeters: 7000,
+    limit: 500,
+  });
+  const educationItems = await osmNearbySearch({
+    lat,
+    lng,
+    filters: educationFilters,
+    radiusMeters: 7000,
+    limit: 500,
+  });
+  const shoppingItems = await osmNearbySearch({
+    lat,
+    lng,
+    filters: shoppingFilters,
+    radiusMeters: 7000,
+    limit: 500,
+  });
+  const items = [
+    ...transportationItems,
+    ...healthcareItems,
+    ...educationItems,
+    ...shoppingItems,
+  ].sort((a, b) => (a.distance_m || 0) - (b.distance_m || 0));
+
+  const isTransportation = (item) =>
+    hasAnyType(item, [
+      "amenity:charging_station",
+      "highway:bus_stop",
+      "amenity:bus_station",
+      "railway:tram_stop",
+      "station:light_rail",
+      "station:subway",
+      "railway:subway_entrance",
+      "public_transport:station",
+    ]) || item?.tags?.subway === "yes";
+  isTransportation.labelFor = transportationLabel;
+
+  const isHealthcare = (item) =>
+    hasAnyType(item, [
+      "amenity:hospital",
+      "amenity:clinic",
+      "amenity:doctors",
+      "amenity:dentist",
+      "amenity:pharmacy",
+    ]) ||
+    ["doctor", "clinic", "hospital", "dentist", "pharmacy"].includes(
+      String(item?.tags?.healthcare || ""),
+    );
+  isHealthcare.labelFor = healthcareLabel;
+
+  const isEducation = (item) =>
+    hasAnyType(item, [
+      "amenity:kindergarten",
+      "amenity:childcare",
+      "amenity:school",
+      "amenity:university",
+      "amenity:college",
+    ]);
+  isEducation.labelFor = educationLabel;
+
+  const isShopping = (item) =>
+    hasAnyType(item, [
+      "shop:mall",
+      "building:retail",
+      "shop:supermarket",
+      "shop:convenience",
+      "shop:department_store",
+      "shop:bakery",
+      "shop:greengrocer",
+    ]);
+  isShopping.labelFor = shoppingLabel;
+
+  const transportation = buildBalancedRecords(
+    transportationItems,
+    [
+      {
+        label: "EV Charging Station",
+        predicate: (item) => hasType(item, "amenity:charging_station"),
+      },
+      {
+        label: "Metro Station",
+        predicate: (item) =>
+          hasType(item, "station:subway") ||
+          hasType(item, "railway:subway_entrance") ||
+          item?.tags?.subway === "yes",
+      },
+      {
+        label: "Bus Stop",
+        predicate: (item) =>
+          hasAnyType(item, ["highway:bus_stop", "amenity:bus_station"]),
+      },
+      {
+        label: "Tram Station",
+        predicate: (item) =>
+          hasAnyType(item, ["railway:tram_stop", "station:light_rail"]),
+      },
+    ],
+    isTransportation,
+    6,
+  );
+
+  const healthcare = buildBalancedRecords(
+    healthcareItems,
+    [
+      {
+        label: "Hospital",
+        predicate: (item) => hasType(item, "amenity:hospital"),
+      },
+      {
+        label: "Clinic",
+        predicate: (item) => hasType(item, "amenity:clinic"),
+      },
+      {
+        label: "Family Doctor",
+        predicate: (item) =>
+          hasType(item, "amenity:doctors") || item?.tags?.healthcare === "doctor",
+      },
+      {
+        label: "Dentist",
+        predicate: (item) =>
+          hasType(item, "amenity:dentist") || item?.tags?.healthcare === "dentist",
+      },
+      {
+        label: "Pharmacy",
+        predicate: (item) =>
+          hasType(item, "amenity:pharmacy") ||
+          item?.tags?.healthcare === "pharmacy",
+      },
+    ],
+    isHealthcare,
+    5,
+  );
+
+  const education = buildBalancedRecords(
+    educationItems,
+    [
+      {
+        label: "Kindergarten / Preschool",
+        predicate: (item) =>
+          hasAnyType(item, ["amenity:kindergarten", "amenity:childcare"]),
+      },
+      {
+        label: "Primary School",
+        predicate: (item) =>
+          hasType(item, "amenity:school") &&
+          (String(item?.tags?.["isced:level"] || "").startsWith("1") ||
+            nameMatches(item, /primary|grundschule/i)),
+      },
+      {
+        label: "Middle School",
+        predicate: (item) =>
+          hasType(item, "amenity:school") &&
+          (String(item?.tags?.["isced:level"] || "").startsWith("2") ||
+            nameMatches(item, /middle|secondary|mittelschule|realschule/i)),
+      },
+      {
+        label: "High School",
+        predicate: (item) =>
+          hasType(item, "amenity:school") &&
+          (String(item?.tags?.["isced:level"] || "").startsWith("3") ||
+            nameMatches(item, /high school|gymnasium|lyceum/i)),
+      },
+      {
+        label: "University",
+        predicate: (item) =>
+          hasAnyType(item, ["amenity:university", "amenity:college"]),
+      },
+    ],
+    isEducation,
+    6,
+  );
+
+  const shopping = buildBalancedRecords(
+    shoppingItems,
+    [
+      {
+        label: "Shopping Mall",
+        predicate: (item) => hasAnyType(item, ["shop:mall", "building:retail"]),
+      },
+      {
+        label: "Supermarket",
+        predicate: (item) => hasType(item, "shop:supermarket"),
+      },
+      {
+        label: "Convenience Store",
+        predicate: (item) => hasType(item, "shop:convenience"),
+      },
+      {
+        label: "Department Store",
+        predicate: (item) => hasType(item, "shop:department_store"),
+      },
+      {
+        label: "Bakery",
+        predicate: (item) => hasType(item, "shop:bakery"),
+      },
+    ],
+    isShopping,
+    5,
+  );
 
   const nearest = (predicate) => items.find(predicate) || null;
-  const placeRecord = (label, place) => ({
-    label,
-    place,
-    name: place?.name || null,
-    vicinity: place?.vicinity || null,
-    distance_m: place?.distance_m ?? null,
-    place_id: place?.place_id || null,
-    types: place?.types || null,
-    lat: place?.lat ?? null,
-    lng: place?.lng ?? null,
-  });
 
   const evCharging = placeRecord(
     "EV Charging Station",
@@ -414,16 +853,6 @@ async function buildNearbyPlacesFromOsm({ lat, lng }) {
     "Tram Station",
     nearest((item) =>
       hasAnyType(item, ["railway:tram_stop", "station:light_rail"]),
-    ),
-  );
-  const healthcare = placeRecord(
-    "Hospital / Clinic / Family Doctor",
-    nearest((item) =>
-      hasAnyType(item, [
-        "amenity:hospital",
-        "amenity:clinic",
-        "amenity:doctors",
-      ]),
     ),
   );
   const preschool = placeRecord(
@@ -473,21 +902,15 @@ async function buildNearbyPlacesFromOsm({ lat, lng }) {
 
   return {
     surroundings: {
-      transportation: [evCharging, metroStation, busStop, tramStation],
-      healthcare: [healthcare],
-      education: [
-        preschool,
-        primarySchool,
-        secondarySchool,
-        highSchool,
-        university,
-      ],
-      shopping: [shoppingMall, supermarket],
+      transportation,
+      healthcare,
+      education,
+      shopping,
     },
     transport: [evCharging, metroStation, busStop, tramStation].flatMap((item) =>
       item?.place ? [item.place] : [],
     ),
-    health: healthcare?.place ? [healthcare.place] : [],
+    health: healthcare.flatMap((item) => (item?.place ? [item.place] : [])),
     education: [
       preschool,
       primarySchool,
@@ -629,8 +1052,15 @@ export async function buildNearbyPlaces({ lat, lng }) {
   }
 
   try {
-    if (!pickGoogleMapsApiKey()) {
-      return await buildNearbyPlacesFromOsm({ lat, lng });
+    if (process.env.ENABLE_GOOGLE_PLACES_LOOKUP !== "true") {
+      let best = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const next = await buildNearbyPlacesFromOsm({ lat, lng });
+        best = mergeNearbyResults(best, next);
+        if (hasMinimumSurroundings(best, 3)) return best;
+        if (attempt < 2) await sleep(800);
+      }
+      return best;
     }
 
     const [
