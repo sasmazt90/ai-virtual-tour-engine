@@ -320,12 +320,10 @@ async function osmNearbySearch({
       const tags = el?.tags && typeof el.tags === "object" ? el.tags : {};
       const name =
         tags.name ||
+        tags.description ||
+        tags.ref_name ||
         tags.brand ||
         tags.operator ||
-        tags.amenity ||
-        tags.shop ||
-        tags.railway ||
-        tags.highway ||
         null;
       const meters = haversineMeters({ lat, lng }, { lat: elLat, lng: elLng });
 
@@ -406,17 +404,27 @@ function buildBalancedRecords(items, matchers, fallbackPredicate, limit = 5) {
   const seen = new Set();
   const add = (label, place) => {
     if (!place) return;
-    const key = place.place_id || `${place.name}-${place.lat}-${place.lng}`;
+    if (!place.name && records.some((record) => record.label === label)) return;
+    const key = place.name
+      ? `${label}-${String(place.name).toLowerCase()}`
+      : place.place_id || `${place.lat}-${place.lng}`;
     if (!key || seen.has(key)) return;
     seen.add(key);
     records.push(placeRecord(label, place));
   };
 
+  const sortedItems = [...(items || [])].sort((a, b) => {
+    const aHasName = a?.name ? 0 : 1;
+    const bHasName = b?.name ? 0 : 1;
+    if (aHasName !== bHasName) return aHasName - bHasName;
+    return Number(a?.distance_m || 0) - Number(b?.distance_m || 0);
+  });
+
   for (const matcher of matchers) {
-    add(matcher.label, items.find(matcher.predicate));
+    add(matcher.label, sortedItems.find(matcher.predicate));
   }
 
-  for (const place of uniqueTop(items, fallbackPredicate, limit)) {
+  for (const place of uniqueTop(sortedItems, fallbackPredicate, limit)) {
     const label =
       typeof fallbackPredicate?.labelFor === "function"
         ? fallbackPredicate.labelFor(place)
@@ -461,7 +469,9 @@ function mergeRecords(primary, secondary, limit = 6) {
   const merged = [];
 
   for (const item of [...(primary || []), ...(secondary || [])]) {
-    const key = item?.place_id || `${item?.label}-${item?.name}-${item?.distance_m}`;
+    const key = item?.name
+      ? `${item?.label}-${String(item.name).toLowerCase()}`
+      : item?.place_id || `${item?.label}-${item?.distance_m}`;
     if (!key || seen.has(key)) continue;
     seen.add(key);
     merged.push(item);

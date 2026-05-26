@@ -80,7 +80,19 @@ function normalizeSurroundingItem(raw) {
 
   const place = raw.place && typeof raw.place === "object" ? raw.place : raw;
   const label = raw.label ? String(raw.label) : "";
-  const name = place?.name ? String(place.name) : "";
+  const tags = place?.tags && typeof place.tags === "object" ? place.tags : {};
+  const rawName = place?.name ? String(place.name) : "";
+  const technicalNames = new Set([
+    "subway_entrance",
+    "bus_stop",
+    "tram_stop",
+    "station",
+    "halt",
+    "stop",
+  ]);
+  const name = technicalNames.has(rawName.toLowerCase())
+    ? String(tags.description || tags.name || tags.ref || rawName)
+    : rawName;
   const distance = raw.distance_m ?? place?.distance_m ?? null;
 
   if (!label && !name && distance === null) return null;
@@ -91,6 +103,28 @@ function normalizeSurroundingItem(raw) {
     distance_m: distance,
     place_id: raw.place_id || place?.place_id || `${label}-${name}`,
   };
+}
+
+function groupSurroundingItems(items) {
+  const groups = [];
+  const byLabel = new Map();
+
+  for (const item of Array.isArray(items) ? items : []) {
+    const label = item?.label || "Nearby place";
+    if (!byLabel.has(label)) {
+      const group = { label, places: [] };
+      byLabel.set(label, group);
+      groups.push(group);
+    }
+    byLabel.get(label).places.push(item);
+  }
+
+  return groups.map((group) => ({
+    ...group,
+    places: group.places
+      .slice()
+      .sort((a, b) => Number(a?.distance_m || 0) - Number(b?.distance_m || 0)),
+  }));
 }
 
 function buildSurroundingGroups(nearby) {
@@ -152,29 +186,53 @@ function SurroundingList({ items }) {
     );
   }
 
+  const grouped = groupSurroundingItems(list).slice(0, 10);
+
   return (
-    <div className="mt-2 space-y-2">
-      {list.slice(0, 10).map((p, idx) => {
-        const dist = formatDistance(p?.distance_m);
-        const key = p?.place_id || `${p?.label}-${idx}`;
+    <div className="mt-3 space-y-3">
+      {grouped.map((group) => {
+        const nearest = group.places[0];
+        const nearestDistance = formatDistance(nearest?.distance_m);
+        const key = `${group.label}-${nearest?.place_id || nearest?.name || ""}`;
 
         return (
           <div
             key={key}
-            className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 text-sm text-gray-800 dark:text-gray-200 font-jetbrains-mono"
+            className="rounded-lg border border-gray-200/70 bg-gray-50/70 p-3 dark:border-gray-700/70 dark:bg-[#202020]"
           >
-            <div className="min-w-0">
-              <div className="font-medium text-gray-900 dark:text-gray-100">
-                {p?.label || "Nearby place"}
-              </div>
-              {p?.name ? (
-                <div className="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
-                  {p.name}
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="font-medium text-gray-900 dark:text-gray-100 font-jetbrains-mono">
+                  {group.label}
                 </div>
-              ) : null}
+                <div className="mt-0.5 text-xs text-gray-500 dark:text-gray-400 font-jetbrains-mono">
+                  {group.places.length} nearby{" "}
+                  {group.places.length === 1 ? "place" : "places"}
+                </div>
+              </div>
+              <div className="shrink-0 text-sm text-gray-500 dark:text-gray-400 font-jetbrains-mono">
+                {nearestDistance || ""}
+              </div>
             </div>
-            <div className="shrink-0 text-gray-500 dark:text-gray-400">
-              {dist || ""}
+
+            <div className="mt-3 space-y-1.5">
+              {group.places.slice(0, 5).map((p, idx) => {
+                const dist = formatDistance(p?.distance_m);
+                const placeKey = p?.place_id || `${group.label}-${p?.name}-${idx}`;
+                return (
+                  <div
+                    key={placeKey}
+                    className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 text-sm text-gray-700 dark:text-gray-300 font-jetbrains-mono"
+                  >
+                    <div className="min-w-0 truncate">
+                      {p?.name || group.label}
+                    </div>
+                    <div className="shrink-0 text-gray-500 dark:text-gray-400">
+                      {dist || ""}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         );
