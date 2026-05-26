@@ -192,7 +192,6 @@ function SurroundingList({ items }) {
     <div className="mt-3 space-y-3">
       {grouped.map((group) => {
         const nearest = group.places[0];
-        const nearestDistance = formatDistance(nearest?.distance_m);
         const key = `${group.label}-${nearest?.place_id || nearest?.name || ""}`;
 
         return (
@@ -209,9 +208,6 @@ function SurroundingList({ items }) {
                   {group.places.length} nearby{" "}
                   {group.places.length === 1 ? "place" : "places"}
                 </div>
-              </div>
-              <div className="shrink-0 text-sm text-gray-500 dark:text-gray-400 font-jetbrains-mono">
-                {nearestDistance || ""}
               </div>
             </div>
 
