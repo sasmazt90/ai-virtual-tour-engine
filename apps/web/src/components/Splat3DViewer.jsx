@@ -1,4 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  RotateCcw,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
 
 function sceneFormatFromExtension(GaussianSplats3D, rawFormat) {
   const format = String(rawFormat || "").toLowerCase();
@@ -29,6 +38,66 @@ function isFiniteVector(raw) {
     raw.length >= 3 &&
     raw.slice(0, 3).every((value) => Number.isFinite(Number(value)))
   );
+}
+
+function configureOrbitControls(controls) {
+  if (!controls) return;
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.14;
+  controls.rotateSpeed = 0.22;
+  controls.zoomSpeed = 0.55;
+  controls.panSpeed = 0.45;
+  controls.enablePan = true;
+  controls.screenSpacePanning = true;
+  controls.update?.();
+}
+
+function cameraStateFromViewer(viewer) {
+  const camera = viewer?.camera;
+  if (!camera) return null;
+  return {
+    position: camera.position.clone(),
+    up: camera.up.clone(),
+    target: viewer.controls?.target?.clone?.() || null,
+  };
+}
+
+async function moveViewerCamera(viewer, action, resetState) {
+  const camera = viewer?.camera;
+  if (!camera) return;
+
+  const THREE = await import("three");
+  const controls = viewer.controls;
+  const target = controls?.target || new THREE.Vector3(0, 0, 0);
+
+  if (action === "reset" && resetState?.position) {
+    camera.position.copy(resetState.position);
+    camera.up.copy(resetState.up);
+    if (controls && resetState.target) {
+      controls.target.copy(resetState.target);
+    }
+    camera.lookAt(resetState.target || target);
+    camera.updateProjectionMatrix?.();
+    controls?.update?.();
+    viewer.forceRenderNextFrame?.();
+    return;
+  }
+
+  const offset = camera.position.clone().sub(target);
+  const spherical = new THREE.Spherical().setFromVector3(offset);
+
+  if (action === "left") spherical.theta -= 0.18;
+  if (action === "right") spherical.theta += 0.18;
+  if (action === "up") spherical.phi = Math.max(0.18, spherical.phi - 0.12);
+  if (action === "down") spherical.phi = Math.min(Math.PI - 0.18, spherical.phi + 0.12);
+  if (action === "zoomIn") spherical.radius = Math.max(0.8, spherical.radius * 0.84);
+  if (action === "zoomOut") spherical.radius = Math.min(30, spherical.radius * 1.18);
+
+  camera.position.copy(target.clone().add(new THREE.Vector3().setFromSpherical(spherical)));
+  camera.lookAt(target);
+  camera.updateProjectionMatrix?.();
+  controls?.update?.();
+  viewer.forceRenderNextFrame?.();
 }
 
 async function fitCameraToScene(viewer, preferredCamera) {
@@ -104,6 +173,7 @@ async function fitCameraToScene(viewer, preferredCamera) {
 
     if (viewer.controls) {
       viewer.controls.target.copy(target);
+      configureOrbitControls(viewer.controls);
       viewer.controls.update?.();
     }
 
@@ -120,6 +190,7 @@ async function fitCameraToScene(viewer, preferredCamera) {
 
   if (viewer.controls) {
     viewer.controls.target.copy(center);
+    configureOrbitControls(viewer.controls);
     viewer.controls.update?.();
   }
 
@@ -148,8 +219,7 @@ async function renderFlatRoomScene(root) {
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(0, 1.15, 0);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
+  configureOrbitControls(controls);
   controls.minDistance = 2.1;
   controls.maxDistance = 8;
   controls.update();
@@ -223,6 +293,9 @@ async function renderFlatRoomScene(root) {
   animate();
 
   return {
+    camera,
+    controls,
+    forceRenderNextFrame() {},
     dispose() {
       disposed = true;
       window.removeEventListener("resize", resize);
@@ -246,6 +319,7 @@ async function renderFlatRoomScene(root) {
 export default function Splat3DViewer({ tourPayload, height }) {
   const rootRef = useRef(null);
   const viewerRef = useRef(null);
+  const initialCameraStateRef = useRef(null);
   const [activeSceneIndex, setActiveSceneIndex] = useState(0);
   const [status, setStatus] = useState("loading");
   const [error, setError] = useState("");
@@ -308,6 +382,7 @@ export default function Splat3DViewer({ tourPayload, height }) {
             return;
           }
           viewerRef.current = viewer;
+          initialCameraStateRef.current = cameraStateFromViewer(viewer);
           setStatus("ready");
           return;
         }
@@ -334,6 +409,7 @@ export default function Splat3DViewer({ tourPayload, height }) {
         });
 
         viewerRef.current = viewer;
+        configureOrbitControls(viewer.controls);
 
         const sceneOptions = {
           showLoadingUI: true,
@@ -368,6 +444,7 @@ export default function Splat3DViewer({ tourPayload, height }) {
         }
 
         viewer.start();
+        initialCameraStateRef.current = cameraStateFromViewer(viewer);
         setStatus("ready");
       } catch (err) {
         console.error(err);
@@ -388,6 +465,7 @@ export default function Splat3DViewer({ tourPayload, height }) {
       cancelled = true;
       const viewer = viewerRef.current;
       viewerRef.current = null;
+      initialCameraStateRef.current = null;
       if (viewer) {
         try {
           const result = viewer.dispose();
@@ -419,9 +497,43 @@ export default function Splat3DViewer({ tourPayload, height }) {
       ) : null}
 
       {status === "ready" ? (
-        <div className="pointer-events-none absolute left-3 bottom-3 rounded-md bg-black/55 px-3 py-2 text-xs text-white font-jetbrains-mono">
-          Drag to orbit - right-drag to pan - scroll to zoom
-        </div>
+        <>
+          <div className="absolute right-3 top-3 grid grid-cols-3 gap-1 rounded-md border border-white/15 bg-black/60 p-1 shadow-lg backdrop-blur-sm">
+            {[
+              { action: "zoomOut", icon: ZoomOut, label: "Zoom out" },
+              { action: "up", icon: ArrowUp, label: "Tilt up" },
+              { action: "zoomIn", icon: ZoomIn, label: "Zoom in" },
+              { action: "left", icon: ArrowLeft, label: "Rotate left" },
+              { action: "reset", icon: RotateCcw, label: "Reset view" },
+              { action: "right", icon: ArrowRight, label: "Rotate right" },
+              null,
+              { action: "down", icon: ArrowDown, label: "Tilt down" },
+              null,
+            ].map((item, index) => item ? (
+              <button
+                key={item.label}
+                type="button"
+                aria-label={item.label}
+                title={item.label}
+                onClick={() =>
+                  moveViewerCamera(
+                    viewerRef.current,
+                    item.action,
+                    initialCameraStateRef.current,
+                  )
+                }
+                className="flex h-9 w-9 items-center justify-center rounded-md border border-white/10 bg-white/10 text-white transition hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-amber-400"
+              >
+                <item.icon className="h-4 w-4" aria-hidden="true" />
+              </button>
+            ) : (
+              <div key={`spacer-${index}`} className="h-9 w-9" aria-hidden="true" />
+            ))}
+          </div>
+          <div className="pointer-events-none absolute left-3 bottom-3 rounded-md bg-black/55 px-3 py-2 text-xs text-white font-jetbrains-mono">
+            Drag gently to orbit - use buttons for precise navigation
+          </div>
+        </>
       ) : null}
 
       {status === "ready" && isPlaceholder ? (
