@@ -1,4 +1,5 @@
 const TUS_CHUNK_SIZE = 6 * 1024 * 1024;
+const S3_PROXY_PART_SIZE = 24 * 1024 * 1024;
 
 function resumableEndpointFor(supabaseUrl) {
   const parsed = new URL(supabaseUrl);
@@ -130,6 +131,112 @@ async function uploadViaSignedPut(file, signBody, reportProgress) {
   };
 }
 
+async function postMultipartJson(action, signBody, body) {
+  const response = await fetch(`/api/upload/large/multipart?action=${action}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-object-path": signBody.objectPath || signBody.path,
+    },
+    body: JSON.stringify(body || {}),
+  });
+  const responseBody = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(responseBody?.error || "Multipart upload failed.");
+  }
+  return responseBody;
+}
+
+function uploadMultipartPart(filePart, signBody, uploadId, partNumber) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload/large/multipart?action=part", true);
+    xhr.setRequestHeader("x-object-path", signBody.objectPath || signBody.path);
+    xhr.setRequestHeader("x-upload-id", uploadId);
+    xhr.setRequestHeader("x-part-number", String(partNumber));
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.onload = () => {
+      const body = (() => {
+        try {
+          return JSON.parse(xhr.responseText || "{}");
+        } catch {
+          return {};
+        }
+      })();
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body);
+        return;
+      }
+      reject(new Error(body?.error || `Multipart upload part ${partNumber} failed.`));
+    };
+    xhr.onerror = () => reject(new Error(`Multipart upload part ${partNumber} failed.`));
+    xhr.onabort = () => reject(new Error(`Multipart upload part ${partNumber} was cancelled.`));
+    xhr.send(filePart);
+  });
+}
+
+async function uploadViaMultipartProxy(file, signBody, reportProgress) {
+  const partSize = Math.max(
+    5 * 1024 * 1024,
+    Number(signBody.partSizeBytes || S3_PROXY_PART_SIZE),
+  );
+  const totalParts = Math.ceil(file.size / partSize);
+  const init = await postMultipartJson("init", signBody);
+  const uploadId = init.uploadId;
+  const parts = [];
+
+  if (!uploadId) {
+    throw new Error("Could not prepare multipart upload.");
+  }
+
+  try {
+    for (let index = 0; index < totalParts; index += 1) {
+      const partNumber = index + 1;
+      const start = index * partSize;
+      const end = Math.min(file.size, start + partSize);
+      const filePart = file.slice(start, end);
+      let lastError = null;
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const uploadedPart = await uploadMultipartPart(
+            filePart,
+            signBody,
+            uploadId,
+            partNumber,
+          );
+          parts.push(uploadedPart);
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error;
+          await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+        }
+      }
+
+      if (lastError) throw lastError;
+
+      reportProgress(5 + ((index + 1) / totalParts) * 90);
+    }
+
+    await postMultipartJson("complete", signBody, { uploadId, parts });
+  } catch (error) {
+    await postMultipartJson("abort", signBody, { uploadId }).catch(() => {});
+    throw error;
+  }
+
+  reportProgress(100);
+
+  return {
+    url: signBody.publicUrl || signBody.url,
+    mimeType: file.type || signBody.mimeType || "application/octet-stream",
+    sizeBytes: file.size || signBody.sizeBytes || null,
+    provider: signBody.provider || "s3",
+    objectPath: signBody.objectPath || signBody.path || null,
+    bucket: signBody.bucket || null,
+  };
+}
+
 export async function uploadLargeFile(file, { fallbackName = "upload", onProgress } = {}) {
   if (!file) throw new Error("Choose a file first.");
 
@@ -163,6 +270,10 @@ export async function uploadLargeFile(file, { fallbackName = "upload", onProgres
 
   if (signBody?.uploadMethod === "server-proxy") {
     return uploadViaServer(file, { fallbackName, reportProgress });
+  }
+
+  if (signBody?.uploadMethod === "multipart-proxy") {
+    return uploadViaMultipartProxy(file, signBody, reportProgress);
   }
 
   if (signBody?.uploadMethod === "signed-put") {

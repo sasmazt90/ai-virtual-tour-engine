@@ -269,7 +269,8 @@ export async function POST(request) {
 
       return Response.json({
         provider: "s3",
-        uploadMethod: "server-proxy",
+        uploadMethod: "multipart-proxy",
+        partSizeBytes: 24 * 1024 * 1024,
         bucket: externalVideoStorage.bucket,
         path: objectPath,
         objectPath,
