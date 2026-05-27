@@ -1,5 +1,5 @@
-import { Loader2, Sparkles, Coins } from "lucide-react";
-import { useMemo } from "react";
+import { Loader2, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useRef } from "react";
 import { ModalShell } from "./ModalShell";
 import { useAIBusy } from "@/hooks/useAIBusy";
 import { StatusBanner } from "@/components/StatusBanner";
@@ -60,6 +60,8 @@ export function AIStudioModal({
   const busyHint = showBusy
     ? "You already have jobs running; new jobs may queue."
     : null;
+  const isJobActive = jobStatus === "queued" || jobStatus === "running";
+  const autoRefreshedJobRef = useRef(null);
 
   // STEP 15C: additional subtle note when busy
   // REQUIRED FIX: memoize the rendered note so it won't duplicate across re-renders/refetches
@@ -78,6 +80,16 @@ export function AIStudioModal({
     if (!exists) return null;
     return `This will replace the existing ${stagingType} staging.`;
   }, [property?.stagings, stagingType]);
+
+  useEffect(() => {
+    if (!aiStudioOpen) return;
+    if (!stagingJobId) return;
+    if (jobStatus !== "succeeded") return;
+    if (autoRefreshedJobRef.current === stagingJobId) return;
+
+    autoRefreshedJobRef.current = stagingJobId;
+    onRefreshAfterJob?.();
+  }, [aiStudioOpen, jobStatus, onRefreshAfterJob, stagingJobId]);
 
   if (!aiStudioOpen) return null;
 
@@ -98,8 +110,8 @@ export function AIStudioModal({
                 ) : null}
               </div>
               <div className="mt-1 text-sm text-gray-600 dark:text-gray-300 font-jetbrains-mono">
-                Balance: {creditsBalance.toLocaleString()} - Staging cost:{" "}
-                {estimatedStagingCredits}
+                Balance: {creditsBalance.toLocaleString()} - Total cost:{" "}
+                {Number(estimatedStagingCredits || 0).toLocaleString()}
               </div>
               {busyQueueNoteNode}
             </div>
@@ -298,25 +310,34 @@ export function AIStudioModal({
               ) : null}
 
               <div className="flex flex-col items-end">
-                <div className="mb-1 inline-flex items-center gap-1 text-xs text-gray-700 dark:text-gray-300 font-jetbrains-mono">
-                  <Coins size={14} />
-                  <span>
-                    {Number(estimatedStagingCredits || 0).toLocaleString()}{" "}
-                    credits
-                  </span>
-                </div>
                 <button
                   type="button"
-                  disabled={!canRunStaging || createStagingMutation.isPending}
-                  onClick={() => createStagingMutation.mutate({ stagingType })}
+                  disabled={
+                    createStagingMutation.isPending ||
+                    retryJobMutation.isPending ||
+                    isJobActive ||
+                    (jobStatus !== "succeeded" && !canRunStaging)
+                  }
+                  onClick={async () => {
+                    if (jobStatus === "succeeded") {
+                      await onRefreshAfterJob?.();
+                      onCloseAiStudio?.();
+                      return;
+                    }
+                    createStagingMutation.mutate({ stagingType });
+                  }}
                   className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-[var(--brand)] hover:bg-[var(--brandHover)] text-white rounded-lg font-medium transition-colors disabled:opacity-50 font-jetbrains-mono"
                 >
-                  {createStagingMutation.isPending ? (
+                  {createStagingMutation.isPending || isJobActive ? (
                     <Loader2 size={18} className="animate-spin" />
                   ) : (
                     <Sparkles size={18} />
                   )}
-                  Generate Staging
+                  {isJobActive
+                    ? "Generating..."
+                    : jobStatus === "succeeded"
+                      ? "View in Assets"
+                      : "Generate Staging"}
                 </button>
               </div>
             </div>
@@ -343,15 +364,9 @@ export function AIStudioModal({
             </div>
           ) : null}
 
-          {stagingJobDone ? (
-            <div className="flex items-center justify-end">
-              <button
-                type="button"
-                onClick={onRefreshAfterJob}
-                className="text-sm text-[var(--brandDark)] dark:text-[var(--brand)] hover:underline font-jetbrains-mono"
-              >
-                Refresh property assets
-              </button>
+          {jobStatus === "succeeded" ? (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200 font-jetbrains-mono">
+              Staging completed. Generated images have been added to Assets.
             </div>
           ) : null}
         </div>

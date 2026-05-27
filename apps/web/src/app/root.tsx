@@ -402,9 +402,56 @@ export const useHandleScreenshotRequest = () => {
     };
   }, []);
 };
+
+function useAppVersionRefresh() {
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (import.meta.env.DEV) return;
+
+    const storageKey = '360-estate-suite:app-version';
+    let cancelled = false;
+
+    const checkVersion = async () => {
+      try {
+        const res = await window.fetch('/api/app-version', {
+          cache: 'no-store',
+          headers: { Accept: 'application/json' },
+        });
+        if (!res.ok) return;
+
+        const body = await res.json().catch(() => null);
+        const version =
+          body && typeof body.version === 'string' ? body.version.trim() : '';
+        if (!version || cancelled) return;
+
+        const previous = window.localStorage.getItem(storageKey);
+        if (!previous) {
+          window.localStorage.setItem(storageKey, version);
+          return;
+        }
+
+        if (previous !== version) {
+          window.localStorage.setItem(storageKey, version);
+          window.location.reload();
+        }
+      } catch {
+        // Best-effort only. Never block the app if version check fails.
+      }
+    };
+
+    checkVersion();
+    const interval = window.setInterval(checkVersion, 60_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
+}
 export function Layout({ children }: { children: ReactNode }) {
   useHandshakeParent();
   useHandleScreenshotRequest();
+  useAppVersionRefresh();
   useDevServerHeartbeat();
   const navigate = useNavigate();
   const location = useLocation();
