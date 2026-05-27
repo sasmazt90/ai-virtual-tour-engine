@@ -114,7 +114,7 @@ for (const method of ['post', 'put', 'patch'] as const) {
   app[method](
     '*',
     async (c, next) => {
-      if (c.req.path === '/api/upload/large') {
+      if (c.req.path.startsWith('/api/upload/large')) {
         return next();
       }
 
