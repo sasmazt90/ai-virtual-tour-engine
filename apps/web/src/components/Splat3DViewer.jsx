@@ -4,7 +4,9 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  Home,
   RotateCcw,
+  RotateCw,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -77,6 +79,18 @@ async function moveViewerCamera(viewer, action, resetState) {
       controls.target.copy(resetState.target);
     }
     camera.lookAt(resetState.target || target);
+    camera.updateProjectionMatrix?.();
+    controls?.update?.();
+    viewer.forceRenderNextFrame?.();
+    return;
+  }
+
+  if (action === "rollClockwise" || action === "rollCounterClockwise") {
+    const forward = target.clone().sub(camera.position).normalize();
+    const angle = action === "rollClockwise" ? -Math.PI / 18 : Math.PI / 18;
+
+    camera.up.applyAxisAngle(forward, angle).normalize();
+    camera.lookAt(target);
     camera.updateProjectionMatrix?.();
     controls?.update?.();
     viewer.forceRenderNextFrame?.();
@@ -498,14 +512,17 @@ export default function Splat3DViewer({ tourPayload, height }) {
 
       {status === "ready" ? (
         <>
-          <div className="absolute right-3 top-3 grid grid-cols-3 gap-1 rounded-md border border-white/15 bg-black/60 p-1 shadow-lg backdrop-blur-sm">
+          <div className="absolute right-3 top-3 grid grid-cols-4 gap-1 rounded-md border border-white/15 bg-black/60 p-1 shadow-lg backdrop-blur-sm">
             {[
+              { action: "rollCounterClockwise", icon: RotateCcw, label: "Rotate counter-clockwise" },
               { action: "zoomOut", icon: ZoomOut, label: "Zoom out" },
               { action: "up", icon: ArrowUp, label: "Tilt up" },
               { action: "zoomIn", icon: ZoomIn, label: "Zoom in" },
               { action: "left", icon: ArrowLeft, label: "Rotate left" },
-              { action: "reset", icon: RotateCcw, label: "Reset view" },
+              { action: "reset", icon: Home, label: "Reset view" },
               { action: "right", icon: ArrowRight, label: "Rotate right" },
+              { action: "rollClockwise", icon: RotateCw, label: "Rotate clockwise" },
+              null,
               null,
               { action: "down", icon: ArrowDown, label: "Tilt down" },
               null,
@@ -531,7 +548,7 @@ export default function Splat3DViewer({ tourPayload, height }) {
             ))}
           </div>
           <div className="pointer-events-none absolute left-3 bottom-3 rounded-md bg-black/55 px-3 py-2 text-xs text-white font-jetbrains-mono">
-            Drag gently to orbit - use buttons for precise navigation
+            Drag gently to orbit - use buttons for precise navigation and rotation
           </div>
         </>
       ) : null}
