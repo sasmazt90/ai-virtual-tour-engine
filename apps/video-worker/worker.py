@@ -1625,6 +1625,39 @@ def cleanup_source_videos(job):
     return removed
 
 
+def collect_storage_urls(value, out=None):
+    if out is None:
+        out = set()
+    if not value:
+        return out
+    if isinstance(value, str):
+        if value.startswith("http://") or value.startswith("https://"):
+            out.add(value)
+        return out
+    if isinstance(value, list):
+        for item in value:
+            collect_storage_urls(item, out)
+        return out
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"storage_path", "fileUrl", "url", "download_url", "data_url"}:
+                collect_storage_urls(item, out)
+            elif isinstance(item, (dict, list)):
+                collect_storage_urls(item, out)
+    return out
+
+
+def cleanup_virtual_tour_payload(payload):
+    removed = 0
+    for url in collect_storage_urls(payload):
+        object_path = storage_object_path_from_public_url(url)
+        if object_path and delete_storage_object(object_path):
+            removed += 1
+    if removed:
+        print(f"Cleaned up {removed} previous virtual tour file(s).", flush=True)
+    return removed
+
+
 def save_virtual_tour(conn, job, scenes, skipped_scenes=None):
     request_payload = job.get("request_payload") or {}
     primary_scene = next((scene for scene in scenes if scene.get("fileUrl")), scenes[0])
@@ -1655,7 +1688,7 @@ def save_virtual_tour(conn, job, scenes, skipped_scenes=None):
     }
     with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(
-            "SELECT id FROM virtual_tours WHERE property_id = %s AND source_type = 'original' LIMIT 1",
+            "SELECT id, tour_payload FROM virtual_tours WHERE property_id = %s AND source_type = 'original' LIMIT 1",
             [job["property_id"]],
         )
         existing = cur.fetchone()
@@ -1673,6 +1706,10 @@ def save_virtual_tour(conn, job, scenes, skipped_scenes=None):
                 """,
                 [json.dumps(payload), existing["id"]],
             )
+            try:
+                cleanup_virtual_tour_payload(existing.get("tour_payload"))
+            except Exception as cleanup_exc:
+                print(f"Previous tour cleanup error: {cleanup_exc}", flush=True)
         else:
             cur.execute(
                 """
@@ -1857,6 +1894,10 @@ def main():
               except Exception as refund_exc:
                   print(f"Credit refund failed: {refund_exc}", flush=True)
               update_job(conn, job["id"], status="failed", error=str(exc))
+              try:
+                  cleanup_source_videos(job)
+              except Exception as cleanup_exc:
+                  print(f"Source video cleanup error: {cleanup_exc}", flush=True)
 
           if once_job_id:
               return

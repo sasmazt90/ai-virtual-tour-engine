@@ -5,6 +5,10 @@ import {
   buildNearbyPlaces,
   geocodeAddress,
 } from "@/app/api/utils/googlePlaces";
+import {
+  collectStorageUrlsFromValue,
+  deleteSupabaseStorageObjects,
+} from "@/app/api/utils/storageCleanup";
 
 const JSONB_FIELDS = new Set([
   "features_interior",
@@ -415,17 +419,52 @@ export async function DELETE(request, { params }) {
 
     const { id } = params;
 
+    const existing = await sql(
+      "SELECT id FROM properties WHERE id = $1 AND user_id = $2 LIMIT 1",
+      [id, userId],
+    );
+
+    if (existing.length === 0) {
+      return Response.json({ error: "Property not found" }, { status: 404 });
+    }
+
+    const cleanupUrls = new Set();
+    const [photoRows, assetRows, stagingRows, stagingImageRows, tourRows] =
+      await Promise.all([
+        sql("SELECT storage_path FROM property_photos WHERE property_id = $1", [
+          id,
+        ]),
+        sql("SELECT storage_path FROM custom_assets WHERE property_id = $1", [
+          id,
+        ]),
+        sql("SELECT meta FROM stagings WHERE property_id = $1", [id]),
+        sql(
+          `SELECT si.storage_path
+           FROM staging_images si
+           JOIN stagings s ON s.id = si.staging_id
+           WHERE s.property_id = $1`,
+          [id],
+        ),
+        sql("SELECT tour_payload FROM virtual_tours WHERE property_id = $1", [
+          id,
+        ]),
+      ]);
+
+    for (const row of photoRows) collectStorageUrlsFromValue(row.storage_path, cleanupUrls);
+    for (const row of assetRows) collectStorageUrlsFromValue(row.storage_path, cleanupUrls);
+    for (const row of stagingRows) collectStorageUrlsFromValue(row.meta, cleanupUrls);
+    for (const row of stagingImageRows) collectStorageUrlsFromValue(row.storage_path, cleanupUrls);
+    for (const row of tourRows) collectStorageUrlsFromValue(row.tour_payload, cleanupUrls);
+
     const result = await sql`
       DELETE FROM properties 
       WHERE id = ${id} AND user_id = ${userId}
       RETURNING id
     `;
 
-    if (result.length === 0) {
-      return Response.json({ error: "Property not found" }, { status: 404 });
-    }
+    const cleanup = await deleteSupabaseStorageObjects(cleanupUrls);
 
-    return Response.json({ success: true, id: result[0].id });
+    return Response.json({ success: true, id: result[0].id, cleanup });
   } catch (error) {
     console.error("DELETE /api/properties/[id] error:", error);
     return Response.json({ error: "Internal Server Error" }, { status: 500 });

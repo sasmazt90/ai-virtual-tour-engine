@@ -1,4 +1,5 @@
 import sql from "@/app/api/utils/sql";
+import { deleteSupabaseStorageObjects } from "@/app/api/utils/storageCleanup";
 
 export async function heartbeat({ jobId, progress }) {
   if (!jobId) return;
@@ -154,7 +155,12 @@ export async function createStaging({
 }
 
 export async function deleteStagingImages(stagingId) {
+  const rows = await sql(
+    "SELECT storage_path FROM staging_images WHERE staging_id = $1",
+    [stagingId],
+  );
   await sql("DELETE FROM staging_images WHERE staging_id = $1", [stagingId]);
+  await deleteSupabaseStorageObjects(rows.map((row) => row.storage_path));
 }
 
 export async function insertStagingImage({ stagingId, storagePath }) {

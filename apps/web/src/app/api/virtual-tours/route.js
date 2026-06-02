@@ -1,6 +1,10 @@
 import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
 import { getDbUserIdFromSession } from "@/app/api/utils/dbUser";
+import {
+  collectStorageUrlsFromValue,
+  deleteSupabaseStorageObjects,
+} from "@/app/api/utils/storageCleanup";
 
 function normalizeStagingType(raw) {
   const s = typeof raw === "string" ? raw.trim() : "";
@@ -141,8 +145,8 @@ export async function POST(request) {
     // Overwrite behavior (never create a 2nd tour for the same source slot)
     const existing = await sql(
       sourceType === "original"
-        ? "SELECT id FROM virtual_tours WHERE property_id = $1 AND source_type = 'original' LIMIT 1"
-        : "SELECT id FROM virtual_tours WHERE property_id = $1 AND source_type = 'staging' AND staging_type = $2 LIMIT 1",
+        ? "SELECT id, tour_payload FROM virtual_tours WHERE property_id = $1 AND source_type = 'original' LIMIT 1"
+        : "SELECT id, tour_payload FROM virtual_tours WHERE property_id = $1 AND source_type = 'staging' AND staging_type = $2 LIMIT 1",
       sourceType === "original" ? [propertyId] : [propertyId, stagingTypeDb],
     );
 
@@ -152,6 +156,9 @@ export async function POST(request) {
       const updated = await sql(
         "UPDATE virtual_tours SET base_staging_id = $1, source_type = $2, staging_type = $3, tour_type = $4, tour_payload = $5 WHERE id = $6 RETURNING id, created_at",
         [baseStagingId, sourceType, stagingTypeDb, "panorama", tourPayload, id],
+      );
+      await deleteSupabaseStorageObjects(
+        collectStorageUrlsFromValue(existing[0].tour_payload),
       );
 
       return Response.json({

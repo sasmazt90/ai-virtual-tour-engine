@@ -1,6 +1,10 @@
 import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
 import { getDbUserIdFromSession } from "@/app/api/utils/dbUser";
+import {
+  collectStorageUrlsFromValue,
+  deleteSupabaseStorageObjects,
+} from "@/app/api/utils/storageCleanup";
 
 export async function DELETE(request, { params }) {
   try {
@@ -24,7 +28,7 @@ export async function DELETE(request, { params }) {
 
     // Verify ownership + get staging slot info
     const rows = await sql(
-      `SELECT s.id, s.property_id, s.staging_type
+      `SELECT s.id, s.property_id, s.staging_type, s.meta
        FROM stagings s
        JOIN properties p ON p.id = s.property_id
        WHERE s.id = $1 AND p.user_id = $2
@@ -38,6 +42,23 @@ export async function DELETE(request, { params }) {
 
     const propertyId = rows[0].property_id;
     const stagingType = rows[0].staging_type;
+    const cleanupUrls = collectStorageUrlsFromValue(rows[0].meta);
+
+    const imageRows = await sql(
+      "SELECT storage_path FROM staging_images WHERE staging_id = $1",
+      [stagingId],
+    );
+    for (const image of imageRows) {
+      collectStorageUrlsFromValue(image.storage_path, cleanupUrls);
+    }
+
+    const tourRows = await sql(
+      "SELECT tour_payload FROM virtual_tours WHERE property_id = $1 AND source_type = 'staging' AND staging_type = $2",
+      [propertyId, stagingType],
+    );
+    for (const tour of tourRows) {
+      collectStorageUrlsFromValue(tour.tour_payload, cleanupUrls);
+    }
 
     // Delete associated staging tour(s) and the staging itself.
     // Also remove the staging id from any share links so old links don't break.
@@ -53,7 +74,9 @@ export async function DELETE(request, { params }) {
       txn("DELETE FROM stagings WHERE id = $1", [stagingId]),
     ]);
 
-    return Response.json({ success: true, stagingId });
+    const cleanup = await deleteSupabaseStorageObjects(cleanupUrls);
+
+    return Response.json({ success: true, stagingId, cleanup });
   } catch (error) {
     console.error("DELETE /api/stagings/[id] error:", error);
     return Response.json({ error: "Internal Server Error" }, { status: 500 });

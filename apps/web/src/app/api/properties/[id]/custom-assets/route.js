@@ -1,6 +1,7 @@
 import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
 import { getDbUserIdFromSession } from "@/app/api/utils/dbUser";
+import { deleteSupabaseStorageObjects } from "@/app/api/utils/storageCleanup";
 
 export async function GET(request, { params }) {
   try {
@@ -77,6 +78,54 @@ export async function POST(request, { params }) {
     return Response.json(rows[0], { status: 201 });
   } catch (error) {
     console.error("POST /api/properties/[id]/custom-assets error:", error);
+    return Response.json({ error: "Internal Server Error" }, { status: 500 });
+  }
+}
+
+export async function DELETE(request, { params }) {
+  try {
+    const session = await auth();
+    if (!session || !session.user?.id) {
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const userId = await getDbUserIdFromSession(session);
+    if (!userId) {
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const propertyId = params.id;
+    const url = new URL(request.url);
+    const body = await request.json().catch(() => ({}));
+    const assetId =
+      typeof body?.assetId === "string"
+        ? body.assetId.trim()
+        : url.searchParams.get("assetId")?.trim();
+
+    if (!assetId) {
+      return Response.json({ error: "assetId is required" }, { status: 400 });
+    }
+
+    const rows = await sql(
+      `DELETE FROM custom_assets ca
+       USING properties p
+       WHERE ca.id = $1
+         AND ca.property_id = $2
+         AND p.id = ca.property_id
+         AND p.user_id = $3
+       RETURNING ca.id, ca.storage_path`,
+      [assetId, propertyId, userId],
+    );
+
+    if (rows.length === 0) {
+      return Response.json({ error: "Not found" }, { status: 404 });
+    }
+
+    const cleanup = await deleteSupabaseStorageObjects([rows[0].storage_path]);
+
+    return Response.json({ success: true, id: rows[0].id, cleanup });
+  } catch (error) {
+    console.error("DELETE /api/properties/[id]/custom-assets error:", error);
     return Response.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }

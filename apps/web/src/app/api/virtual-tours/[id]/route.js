@@ -1,6 +1,10 @@
 import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
 import { getDbUserIdFromSession } from "@/app/api/utils/dbUser";
+import {
+  collectStorageUrlsFromValue,
+  deleteSupabaseStorageObjects,
+} from "@/app/api/utils/storageCleanup";
 
 export async function DELETE(request, { params }) {
   try {
@@ -20,7 +24,7 @@ export async function DELETE(request, { params }) {
     }
 
     const owned = await sql(
-      `SELECT vt.id
+      `SELECT vt.id, vt.tour_payload
        FROM virtual_tours vt
        JOIN properties p ON p.id = vt.property_id
        WHERE vt.id = $1 AND p.user_id = $2
@@ -33,8 +37,10 @@ export async function DELETE(request, { params }) {
     }
 
     await sql("DELETE FROM virtual_tours WHERE id = $1", [tourId]);
+    const urls = collectStorageUrlsFromValue(owned[0].tour_payload);
+    const cleanup = await deleteSupabaseStorageObjects(urls);
 
-    return Response.json({ success: true });
+    return Response.json({ success: true, cleanup });
   } catch (error) {
     console.error("DELETE /api/virtual-tours/[id] error:", error);
     return Response.json({ error: "Internal Server Error" }, { status: 500 });

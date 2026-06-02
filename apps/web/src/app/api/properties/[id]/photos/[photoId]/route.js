@@ -1,6 +1,7 @@
 import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
 import { getDbUserIdFromSession } from "@/app/api/utils/dbUser";
+import { deleteSupabaseStorageObjects } from "@/app/api/utils/storageCleanup";
 
 export async function DELETE(request, { params }) {
   try {
@@ -29,7 +30,7 @@ export async function DELETE(request, { params }) {
         AND pp.property_id = $2
         AND p.id = pp.property_id
         AND p.user_id = $3
-      RETURNING pp.id
+      RETURNING pp.id, pp.storage_path
       `,
       [photoId, propertyId, userId],
     );
@@ -38,7 +39,9 @@ export async function DELETE(request, { params }) {
       return Response.json({ error: "Not found" }, { status: 404 });
     }
 
-    return Response.json({ success: true, id: rows[0].id });
+    const cleanup = await deleteSupabaseStorageObjects([rows[0].storage_path]);
+
+    return Response.json({ success: true, id: rows[0].id, cleanup });
   } catch (error) {
     console.error("DELETE /api/properties/[id]/photos/[photoId] error:", error);
     return Response.json({ error: "Internal Server Error" }, { status: 500 });

@@ -1,6 +1,10 @@
 import sql from "@/app/api/utils/sql";
 import { auth } from "@/auth";
 import { getDbUserIdFromSession } from "@/app/api/utils/dbUser";
+import {
+  collectStorageUrlsFromValue,
+  deleteSupabaseStorageObjects,
+} from "@/app/api/utils/storageCleanup";
 
 const SUPPORTED_SPLAT_EXTENSIONS = new Set(["ply", "splat", "ksplat"]);
 
@@ -81,7 +85,7 @@ export async function POST(request) {
     };
 
     const existing = await sql(
-      "SELECT id FROM virtual_tours WHERE property_id = $1 AND source_type = 'original' LIMIT 1",
+      "SELECT id, tour_payload FROM virtual_tours WHERE property_id = $1 AND source_type = 'original' LIMIT 1",
       [propertyId],
     );
 
@@ -89,6 +93,9 @@ export async function POST(request) {
       const rows = await sql(
         "UPDATE virtual_tours SET base_staging_id = NULL, source_type = 'original', staging_type = NULL, tour_type = 'splat3d', tour_payload = $1::jsonb WHERE id = $2 RETURNING id, created_at",
         [JSON.stringify(tourPayload), existing[0].id],
+      );
+      await deleteSupabaseStorageObjects(
+        collectStorageUrlsFromValue(existing[0].tour_payload),
       );
       return Response.json({
         id: rows?.[0]?.id,
