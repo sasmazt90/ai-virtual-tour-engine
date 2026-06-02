@@ -1502,7 +1502,14 @@ def delete_storage_object(object_path):
         "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
     }
     response = requests.delete(delete_url, headers=headers, timeout=60)
-    if not response.ok and response.status_code != 404:
+    body_text = response.text if not response.ok else ""
+    already_missing = (
+        response.status_code == 404
+        or '"statusCode":"404"' in body_text
+        or "Object not found" in body_text
+        or "not_found" in body_text
+    )
+    if not response.ok and not already_missing:
         print(
             f"Source video cleanup failed: {response.status_code} {response.reason} {object_path}",
             flush=True,

@@ -94,10 +94,15 @@ export async function deleteSupabaseStorageObjects(rawUrls) {
         },
       });
 
-      if (response.ok || response.status === 404) {
+      const body = response.ok ? "" : await response.text().catch(() => "");
+      const isAlreadyMissing =
+        response.status === 404 ||
+        /"statusCode"\s*:\s*"404"/i.test(body) ||
+        /object not found|not_found/i.test(body);
+
+      if (response.ok || isAlreadyMissing) {
         deleted += 1;
       } else {
-        const body = await response.text().catch(() => "");
         failed.push({
           objectPath,
           status: response.status,
